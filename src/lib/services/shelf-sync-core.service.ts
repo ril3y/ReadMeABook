@@ -13,8 +13,13 @@ import { createRequestForUser } from '@/lib/services/request-creator.service';
 import { RMABLogger } from '@/lib/utils/logger';
 import { BookMapping } from '@/generated/prisma';
 
-/** Default max Audible lookups per shelf per scheduled sync cycle */
-const DEFAULT_MAX_LOOKUPS_PER_SHELF = 10;
+/** Default max Audible lookups per shelf per scheduled sync cycle.
+ *  Raised from upstream 10 to 5000 for one-shot bulk migrations from
+ *  Readarr → RMAB. The Audible catalog API (`/1.0/catalog/products`)
+ *  has been observed to handle this volume without 503s; the HTML-scrape
+ *  paths still use the AdaptivePacer in scrape-resilience.ts.
+ *  Override per-call via `ShelfSyncOptions.maxLookupsPerShelf`. */
+const DEFAULT_MAX_LOOKUPS_PER_SHELF = 5000;
 
 /** Days before retrying a noMatch book */
 const NO_MATCH_RETRY_DAYS = 7;
