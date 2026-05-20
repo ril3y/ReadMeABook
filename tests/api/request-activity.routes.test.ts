@@ -139,29 +139,71 @@ describe('Request activity route', () => {
     expect(payload.nextCursor).toBe('evt-9');
   });
 
-  it('applies cursor by looking up its createdAt then filtering older events', async () => {
+  it('applies cursor scoped to this request (compound createdAt + id ordering)', async () => {
     prismaMock.request.findFirst.mockResolvedValue({
       id: 'REQ', userId: 'user-1', status: 'downloading',
     });
     const cursorDate = new Date('2025-01-01T10:00:00Z');
-    prismaMock.jobEvent.findUnique.mockResolvedValue({ createdAt: cursorDate });
+    prismaMock.jobEvent.findFirst.mockResolvedValue({ id: 'evt-50', createdAt: cursorDate });
     prismaMock.jobEvent.findMany.mockResolvedValue([]);
 
     const { GET } = await import('@/app/api/requests/[id]/activity/route');
     await GET(buildRequest({ cursor: 'evt-50' }), { params: Promise.resolve({ id: 'REQ' }) });
 
-    expect(prismaMock.jobEvent.findUnique).toHaveBeenCalledWith({
-      where: { id: 'evt-50' },
-      select: { createdAt: true },
+    // Cursor must be SCOPED to the request to prevent cross-tenant probing
+    expect(prismaMock.jobEvent.findFirst).toHaveBeenCalledWith({
+      where: { id: 'evt-50', job: { requestId: 'REQ' } },
+      select: { id: true, createdAt: true },
     });
     expect(prismaMock.jobEvent.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           job: { requestId: 'REQ' },
-          createdAt: { lt: cursorDate },
+          OR: expect.arrayContaining([
+            { createdAt: { lt: cursorDate } },
+            { createdAt: cursorDate, id: { lt: 'evt-50' } },
+          ]),
         }),
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       })
     );
+  });
+
+  it('returns 400 InvalidCursor when cursor does not exist for this request', async () => {
+    prismaMock.request.findFirst.mockResolvedValue({
+      id: 'REQ', userId: 'user-1', status: 'downloading',
+    });
+    prismaMock.jobEvent.findFirst.mockResolvedValue(null); // cursor not found / from another request
+
+    const { GET } = await import('@/app/api/requests/[id]/activity/route');
+    const response = await GET(
+      buildRequest({ cursor: 'evt-from-another-request' }),
+      { params: Promise.resolve({ id: 'REQ' }) }
+    );
+    const payload = await response.json();
+    expect(response.status).toBe(400);
+    expect(payload.error).toBe('InvalidCursor');
+  });
+
+  it('truncates oversized metadata payloads server-side', async () => {
+    prismaMock.request.findFirst.mockResolvedValue({
+      id: 'REQ', userId: 'user-1', status: 'downloading',
+    });
+    const huge = { dump: 'x'.repeat(10_000) };
+    prismaMock.jobEvent.findMany.mockResolvedValue([
+      {
+        id: 'e1', level: 'info', context: 'X', message: 'big',
+        metadata: huge, createdAt: new Date(),
+        job: { id: 'job-1', type: 'monitor_download', status: 'active' },
+      },
+    ]);
+
+    const { GET } = await import('@/app/api/requests/[id]/activity/route');
+    const response = await GET(buildRequest(), { params: Promise.resolve({ id: 'REQ' }) });
+    const payload = await response.json();
+
+    expect(payload.events[0].metadataTruncated).toBe(true);
+    expect(payload.events[0].metadata).toMatchObject({ _truncated: true });
   });
 
   it('clamps limit > 200 to 200', async () => {
