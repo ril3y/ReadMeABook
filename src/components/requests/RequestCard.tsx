@@ -7,6 +7,7 @@
 
 import React from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { StatusBadge } from './StatusBadge';
 import { Button } from '@/components/ui/Button';
 import { useCancelRequest } from '@/lib/hooks/useRequests';
@@ -247,7 +248,13 @@ export function RequestCard({ request, showActions = true }: RequestCardProps) {
 
             {/* Action Buttons */}
             {showActions && (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/requests/${request.id}`}
+                  className="text-xs sm:text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline"
+                >
+                  View activity →
+                </Link>
                 {canCancel && (
                   <Button
                     onClick={() => setConfirmCancelOpen(true)}
