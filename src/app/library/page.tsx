@@ -9,7 +9,7 @@
 
 'use client';
 
-import { Suspense, useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
@@ -17,6 +17,8 @@ import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
 import { useLibraryAudiobooks } from '@/lib/hooks/useLibraryAudiobooks';
 import { useLibraryAuthors, type LibraryAuthor } from '@/lib/hooks/useLibraryAuthors';
 import { useLibrarySeries, type LibrarySeries } from '@/lib/hooks/useLibrarySeries';
+import { useInfiniteScroll } from '@/lib/hooks/useInfiniteScroll';
+import { AlphabetIndex, letterBucket } from '@/components/ui/AlphabetIndex';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { CardSizeControls } from '@/components/ui/CardSizeControls';
 import { SquareCoversToggle } from '@/components/ui/SquareCoversToggle';
@@ -25,10 +27,14 @@ import { usePreferences } from '@/contexts/PreferencesContext';
 type Tab = 'books' | 'authors' | 'series';
 
 function LibraryAuthorTile({ author }: { author: LibraryAuthor }) {
-  const href = `/search?q=${encodeURIComponent(author.name)}`;
+  // Navigates to the library author detail page (owned books + series for
+  // this author). Fallback to /search?q= is no longer needed since we have
+  // a dedicated detail page now.
+  const href = `/library/authors/${encodeURIComponent(author.name)}`;
   return (
     <Link
       href={href}
+      data-letter={letterBucket(author.name)}
       className="group block p-4 rounded-2xl bg-white dark:bg-gray-800 border border-gray-200/70 dark:border-gray-700/70 hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md transition-all"
     >
       <div className="flex items-center justify-between gap-3">
@@ -52,6 +58,7 @@ function LibrarySeriesTile({ series }: { series: LibrarySeries }) {
   return (
     <Link
       href={href}
+      data-letter={letterBucket(series.title)}
       className="group block p-4 rounded-2xl bg-white dark:bg-gray-800 border border-gray-200/70 dark:border-gray-700/70 hover:border-emerald-400 dark:hover:border-emerald-500 hover:shadow-md transition-all"
     >
       <div className="flex items-center justify-between gap-3">
@@ -105,6 +112,45 @@ function LibraryPageContent() {
   const handleTabChange = useCallback((next: Tab) => {
     setTab(next);
   }, []);
+
+  // Infinite-scroll sentinels (one per tab; only the active tab is observed).
+  const booksSentinelRef   = useRef<HTMLDivElement>(null);
+  const authorsSentinelRef = useRef<HTMLDivElement>(null);
+  const seriesSentinelRef  = useRef<HTMLDivElement>(null);
+  useInfiniteScroll({
+    ref: booksSentinelRef,
+    hasMore: tab === 'books' && books.hasMore,
+    isLoading: books.isLoadingMore,
+    onLoadMore: books.loadMore,
+  });
+  useInfiniteScroll({
+    ref: authorsSentinelRef,
+    hasMore: tab === 'authors' && authors.hasMore,
+    isLoading: authors.isLoadingMore,
+    onLoadMore: authors.loadMore,
+  });
+  useInfiniteScroll({
+    ref: seriesSentinelRef,
+    hasMore: tab === 'series' && series.hasMore,
+    isLoading: series.isLoadingMore,
+    onLoadMore: series.loadMore,
+  });
+
+  // Jump-to-letter: scroll the first item whose data-letter matches into view.
+  // Walks the active tab's grid in the DOM rather than maintaining refs per
+  // item, which would balloon at thousands of authors.
+  const handleJump = useCallback((letter: string) => {
+    if (typeof document === 'undefined') return;
+    const containerSelector =
+      tab === 'authors' ? '[data-grid="authors"]' :
+      tab === 'series'  ? '[data-grid="series"]'  : null;
+    if (!containerSelector) return;
+    const container = document.querySelector(containerSelector);
+    if (!container) return;
+    const match = container.querySelector(`[data-letter="${letter}"]`);
+    if (match) match.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    else if (letter === 'A') container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [tab]);
 
   return (
     <ProtectedRoute>
@@ -230,7 +276,7 @@ function LibraryPageContent() {
             </div>
           </div>
 
-          {/* Results */}
+          {/* Results — Authors/Series tabs get a floating A-Z rail on the right */}
           {tab === 'books' ? (
             <div className="space-y-6">
               <AudiobookGrid
@@ -245,95 +291,100 @@ function LibraryPageContent() {
                 squareCovers={squareCovers}
               />
               {books.hasMore && (
-                <div className="flex justify-center pt-2">
-                  <button
-                    type="button"
-                    onClick={books.loadMore}
-                    disabled={books.isLoadingMore}
-                    className="px-6 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {books.isLoadingMore ? 'Loading...' : 'Load more'}
-                  </button>
+                <div ref={booksSentinelRef} className="h-12 flex items-center justify-center">
+                  {books.isLoadingMore && (
+                    <span className="text-sm text-gray-500 dark:text-gray-400">Loading more…</span>
+                  )}
                 </div>
               )}
             </div>
           ) : tab === 'authors' ? (
-            <div className="space-y-6">
-              {authors.isLoading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Array.from({ length: 12 }).map((_, i) => (
-                    <div key={i} className="h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
-                  ))}
-                </div>
-              ) : authors.authors.length === 0 ? (
-                <div className="text-center py-16 text-gray-600 dark:text-gray-400">
-                  {debouncedQuery
-                    ? `No authors in your library match "${debouncedQuery}"`
-                    : 'No authors found in your library'}
-                </div>
-              ) : (
-                <>
+            <div className="relative">
+              <div className="space-y-6">
+                {authors.isLoading ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {authors.authors.map(a => (
-                      <LibraryAuthorTile key={a.name} author={a} />
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <div key={i} className="h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
                     ))}
                   </div>
-                  {authors.hasMore && (
-                    <div className="flex justify-center pt-2">
-                      <button
-                        type="button"
-                        onClick={authors.loadMore}
-                        disabled={authors.isLoadingMore}
-                        className="px-6 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {authors.isLoadingMore ? 'Loading...' : 'Load more'}
-                      </button>
+                ) : authors.authors.length === 0 ? (
+                  <div className="text-center py-16 text-gray-600 dark:text-gray-400">
+                    {debouncedQuery
+                      ? `No authors in your library match "${debouncedQuery}"`
+                      : 'No authors found in your library'}
+                  </div>
+                ) : (
+                  <>
+                    <div data-grid="authors" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
+                      {authors.authors.map(a => (
+                        <LibraryAuthorTile key={a.name} author={a} />
+                      ))}
                     </div>
-                  )}
-                </>
+                    {authors.hasMore && (
+                      <div ref={authorsSentinelRef} className="h-12 flex items-center justify-center">
+                        {authors.isLoadingMore && (
+                          <span className="text-sm text-gray-500 dark:text-gray-400">Loading more…</span>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              {authors.authors.length > 0 && (
+                <AlphabetIndex
+                  items={authors.authors}
+                  getKey={a => a.name}
+                  onJump={handleJump}
+                  className="fixed right-2 top-1/2 -translate-y-1/2 z-40 bg-white/80 dark:bg-gray-900/80 backdrop-blur rounded-xl py-2 px-1 shadow-lg"
+                />
               )}
             </div>
           ) : (
             // Series tab
-            <div className="space-y-6">
-              {series.isLoading ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Array.from({ length: 9 }).map((_, i) => (
-                    <div key={i} className="h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
-                  ))}
-                </div>
-              ) : series.series.length === 0 ? (
-                <div className="text-center py-16 space-y-2 text-gray-600 dark:text-gray-400">
-                  <p>
-                    {debouncedQuery
-                      ? `No series in your library match "${debouncedQuery}"`
-                      : 'No series found in your library yet'}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-500 max-w-md mx-auto">
-                    Series listings depend on Audible metadata being resolved for owned books.
-                    As more of your library matches against Audible, more series will appear here.
-                  </p>
-                </div>
-              ) : (
-                <>
+            <div className="relative">
+              <div className="space-y-6">
+                {series.isLoading ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {series.series.map(s => (
-                      <LibrarySeriesTile key={s.title} series={s} />
+                    {Array.from({ length: 9 }).map((_, i) => (
+                      <div key={i} className="h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
                     ))}
                   </div>
-                  {series.hasMore && (
-                    <div className="flex justify-center pt-2">
-                      <button
-                        type="button"
-                        onClick={series.loadMore}
-                        disabled={series.isLoadingMore}
-                        className="px-6 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {series.isLoadingMore ? 'Loading...' : 'Load more'}
-                      </button>
+                ) : series.series.length === 0 ? (
+                  <div className="text-center py-16 space-y-2 text-gray-600 dark:text-gray-400">
+                    <p>
+                      {debouncedQuery
+                        ? `No series in your library match "${debouncedQuery}"`
+                        : 'No series found in your library yet'}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 max-w-md mx-auto">
+                      Series listings depend on Audible metadata being resolved for owned books.
+                      As more of your library matches against Audible, more series will appear here.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div data-grid="series" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
+                      {series.series.map(s => (
+                        <LibrarySeriesTile key={s.title} series={s} />
+                      ))}
                     </div>
-                  )}
-                </>
+                    {series.hasMore && (
+                      <div ref={seriesSentinelRef} className="h-12 flex items-center justify-center">
+                        {series.isLoadingMore && (
+                          <span className="text-sm text-gray-500 dark:text-gray-400">Loading more…</span>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              {series.series.length > 0 && (
+                <AlphabetIndex
+                  items={series.series}
+                  getKey={s => s.title}
+                  onJump={handleJump}
+                  className="fixed right-2 top-1/2 -translate-y-1/2 z-40 bg-white/80 dark:bg-gray-900/80 backdrop-blur rounded-xl py-2 px-1 shadow-lg"
+                />
               )}
             </div>
           )}
