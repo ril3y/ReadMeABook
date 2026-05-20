@@ -16,12 +16,13 @@ import { Header } from '@/components/layout/Header';
 import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
 import { useLibraryAudiobooks } from '@/lib/hooks/useLibraryAudiobooks';
 import { useLibraryAuthors, type LibraryAuthor } from '@/lib/hooks/useLibraryAuthors';
+import { useLibrarySeries, type LibrarySeries } from '@/lib/hooks/useLibrarySeries';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { CardSizeControls } from '@/components/ui/CardSizeControls';
 import { SquareCoversToggle } from '@/components/ui/SquareCoversToggle';
 import { usePreferences } from '@/contexts/PreferencesContext';
 
-type Tab = 'books' | 'authors';
+type Tab = 'books' | 'authors' | 'series';
 
 function LibraryAuthorTile({ author }: { author: LibraryAuthor }) {
   const href = `/search?q=${encodeURIComponent(author.name)}`;
@@ -42,11 +43,38 @@ function LibraryAuthorTile({ author }: { author: LibraryAuthor }) {
   );
 }
 
+function LibrarySeriesTile({ series }: { series: LibrarySeries }) {
+  // Prefer Audible series detail page when we have a series ASIN; otherwise
+  // search by title (so the user can still drill in).
+  const href = series.asin
+    ? `/series/${series.asin}`
+    : `/search?q=${encodeURIComponent(series.title)}`;
+  return (
+    <Link
+      href={href}
+      className="group block p-4 rounded-2xl bg-white dark:bg-gray-800 border border-gray-200/70 dark:border-gray-700/70 hover:border-emerald-400 dark:hover:border-emerald-500 hover:shadow-md transition-all"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100 truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+          {series.title}
+        </h3>
+        <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200">
+          {series.bookCount} {series.bookCount === 1 ? 'book' : 'books'}
+        </span>
+      </div>
+    </Link>
+  );
+}
+
 function LibraryPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const initialTab = (searchParams.get('tab') as Tab) === 'authors' ? 'authors' : 'books';
+  const tabParam = searchParams.get('tab');
+  const initialTab: Tab =
+    tabParam === 'authors' ? 'authors'
+    : tabParam === 'series' ? 'series'
+    : 'books';
   const initialQuery = searchParams.get('q') || '';
 
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -70,6 +98,7 @@ function LibraryPageContent() {
 
   const books = useLibraryAudiobooks(debouncedQuery);
   const authors = useLibraryAuthors(debouncedQuery);
+  const series = useLibrarySeries(debouncedQuery);
 
   const handleTabChange = useCallback((next: Tab) => {
     setTab(next);
@@ -116,6 +145,17 @@ function LibraryPageContent() {
               >
                 Authors
               </button>
+              <button
+                type="button"
+                onClick={() => handleTabChange('series')}
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                  tab === 'series'
+                    ? 'bg-white dark:bg-gray-900 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100'
+                }`}
+              >
+                Series
+              </button>
             </div>
           </div>
 
@@ -132,7 +172,11 @@ function LibraryPageContent() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={tab === 'books' ? 'Filter books in your library...' : 'Filter authors...'}
+                placeholder={
+                  tab === 'books'   ? 'Filter books in your library...'
+                  : tab === 'authors' ? 'Filter authors...'
+                  : 'Filter series...'
+                }
                 className="w-full pl-12 pr-12 py-3 text-base border-2 border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400"
               />
               {query && (
@@ -157,7 +201,7 @@ function LibraryPageContent() {
               <div className="flex items-center gap-3">
                 <div className="w-1 h-6 bg-gradient-to-b from-emerald-500 to-teal-500 rounded-full" />
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-gray-100 truncate">
-                  {tab === 'books' ? 'Books' : 'Authors'}
+                  {tab === 'books' ? 'Books' : tab === 'authors' ? 'Authors' : 'Series'}
                 </h2>
                 {tab === 'books' && !books.isLoading && (
                   <span className="text-sm text-gray-600 dark:text-gray-400 hidden sm:inline whitespace-nowrap">
@@ -167,6 +211,11 @@ function LibraryPageContent() {
                 {tab === 'authors' && !authors.isLoading && (
                   <span className="text-sm text-gray-600 dark:text-gray-400 hidden sm:inline whitespace-nowrap">
                     ({authors.totalCount} {authors.totalCount === 1 ? 'author' : 'authors'})
+                  </span>
+                )}
+                {tab === 'series' && !series.isLoading && (
+                  <span className="text-sm text-gray-600 dark:text-gray-400 hidden sm:inline whitespace-nowrap">
+                    ({series.totalCount} {series.totalCount === 1 ? 'series' : 'series'})
                   </span>
                 )}
                 {tab === 'books' && (
@@ -206,7 +255,7 @@ function LibraryPageContent() {
                 </div>
               )}
             </div>
-          ) : (
+          ) : tab === 'authors' ? (
             <div className="space-y-6">
               {authors.isLoading ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -236,6 +285,49 @@ function LibraryPageContent() {
                         className="px-6 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                       >
                         {authors.isLoadingMore ? 'Loading...' : 'Load more'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ) : (
+            // Series tab
+            <div className="space-y-6">
+              {series.isLoading ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {Array.from({ length: 9 }).map((_, i) => (
+                    <div key={i} className="h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
+                  ))}
+                </div>
+              ) : series.series.length === 0 ? (
+                <div className="text-center py-16 space-y-2 text-gray-600 dark:text-gray-400">
+                  <p>
+                    {debouncedQuery
+                      ? `No series in your library match "${debouncedQuery}"`
+                      : 'No series found in your library yet'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-500 max-w-md mx-auto">
+                    Series listings depend on Audible metadata being resolved for owned books.
+                    As more of your library matches against Audible, more series will appear here.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {series.series.map(s => (
+                      <LibrarySeriesTile key={s.title} series={s} />
+                    ))}
+                  </div>
+                  {series.hasMore && (
+                    <div className="flex justify-center pt-2">
+                      <button
+                        type="button"
+                        onClick={series.loadMore}
+                        disabled={series.isLoadingMore}
+                        className="px-6 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {series.isLoadingMore ? 'Loading...' : 'Load more'}
                       </button>
                     </div>
                   )}
