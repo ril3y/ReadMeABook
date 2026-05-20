@@ -171,8 +171,8 @@ export function RequestActivityTimeline({ events, isLoading, requestStatus }: Pr
 
   return (
     <div className="space-y-4">
-      {groups.map((g, i) => (
-        <JobGroup key={`${g.jobId}-${i}`} {...g} />
+      {groups.map(g => (
+        <JobGroup key={g.jobId} {...g} />
       ))}
     </div>
   );

@@ -28,6 +28,7 @@ describe('useRequestActivity', () => {
       error: null, isLoading: false, mutate: vi.fn(),
     });
     const { useRequestActivity } = await import('@/lib/hooks/useRequestActivity');
+    // Pass fallback status; the hook should also pick it up from data
     const Probe = () => { useRequestActivity('REQ', 'downloading'); return null; };
     render(<Probe />);
     expect(useSWRMock).toHaveBeenCalledWith(
