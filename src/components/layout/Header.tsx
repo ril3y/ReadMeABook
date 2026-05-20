@@ -142,6 +142,14 @@ export function Header() {
             >
               Home
             </Link>
+            {user && (
+              <Link
+                href="/library"
+                className="text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+              >
+                Library
+              </Link>
+            )}
             <Link
               href="/search"
               className="text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
@@ -287,6 +295,15 @@ export function Header() {
               >
                 Home
               </Link>
+              {user && (
+                <Link
+                  href="/library"
+                  onClick={() => setShowMobileMenu(false)}
+                  className="px-3 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                >
+                  Library
+                </Link>
+              )}
               <Link
                 href="/search"
                 onClick={() => setShowMobileMenu(false)}
