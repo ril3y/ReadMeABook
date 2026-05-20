@@ -3,38 +3,19 @@
  * Documentation: documentation/frontend/components.md
  *
  * Distinct authors in the owned library (plex_library) with book counts.
- * Aggregated via Prisma groupBy. NULL or empty author values are skipped.
+ * Aggregated via Prisma groupBy. The PlexLibrary.author column is
+ * non-nullable in the schema, but empty-string values can sneak in from
+ * imperfect backend metadata — those are filtered out below.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { prisma } from '@/lib/db';
-import { getConfigService } from '@/lib/services/config.service';
+import { resolveLibraryId } from '@/lib/services/library-id';
 import { RMABLogger } from '@/lib/utils/logger';
 import type { Prisma } from '@/generated/prisma';
 
 const logger = RMABLogger.create('API.Library.Authors');
-
-async function resolveLibraryId(): Promise<string | { error: NextResponse }> {
-  const configService = getConfigService();
-  const backendMode = await configService.getBackendMode();
-  if (backendMode === 'audiobookshelf') {
-    const absLibraryId = await configService.get('audiobookshelf.library_id');
-    if (!absLibraryId) {
-      return { error: NextResponse.json(
-        { error: 'NoLibraryConfigured', message: 'No Audiobookshelf library ID configured' },
-        { status: 400 }) };
-    }
-    return absLibraryId;
-  }
-  const plexConfig = await configService.getPlexConfig();
-  if (!plexConfig.libraryId) {
-    return { error: NextResponse.json(
-      { error: 'NoLibraryConfigured', message: 'No Plex library ID configured' },
-      { status: 400 }) };
-  }
-  return plexConfig.libraryId;
-}
 
 async function getLibraryAuthors(req: AuthenticatedRequest) {
   try {
@@ -44,9 +25,9 @@ async function getLibraryAuthors(req: AuthenticatedRequest) {
     const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
     const search = (searchParams.get('search') || '').trim();
 
-    const libraryIdOrError = await resolveLibraryId();
-    if (typeof libraryIdOrError !== 'string') return libraryIdOrError.error;
-    const libraryId = libraryIdOrError;
+    const lib = await resolveLibraryId();
+    if (!lib.ok) return lib.response;
+    const libraryId = lib.libraryId;
 
     const where: Prisma.PlexLibraryWhereInput = {
       plexLibraryId: libraryId,

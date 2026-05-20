@@ -12,13 +12,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { prisma } from '@/lib/db';
-import { getConfigService } from '@/lib/services/config.service';
+import { resolveLibraryId } from '@/lib/services/library-id';
 import { RMABLogger } from '@/lib/utils/logger';
 import type { Prisma } from '@/generated/prisma';
 
 const logger = RMABLogger.create('API.Library.Audiobooks');
 
-type Sort = 'addedAt_desc' | 'addedAt_asc' | 'title_asc' | 'title_desc' | 'author_asc';
+const VALID_SORTS = ['addedAt_desc', 'addedAt_asc', 'title_asc', 'title_desc', 'author_asc'] as const;
+type Sort = typeof VALID_SORTS[number];
+
+function isSort(v: string): v is Sort {
+  return (VALID_SORTS as readonly string[]).includes(v);
+}
 
 function resolveOrderBy(sort: Sort): Prisma.PlexLibraryOrderByWithRelationInput {
   switch (sort) {
@@ -31,27 +36,6 @@ function resolveOrderBy(sort: Sort): Prisma.PlexLibraryOrderByWithRelationInput 
   }
 }
 
-async function resolveLibraryId(): Promise<string | { error: NextResponse }> {
-  const configService = getConfigService();
-  const backendMode = await configService.getBackendMode();
-  if (backendMode === 'audiobookshelf') {
-    const absLibraryId = await configService.get('audiobookshelf.library_id');
-    if (!absLibraryId) {
-      return { error: NextResponse.json(
-        { error: 'NoLibraryConfigured', message: 'No Audiobookshelf library ID configured' },
-        { status: 400 }) };
-    }
-    return absLibraryId;
-  }
-  const plexConfig = await configService.getPlexConfig();
-  if (!plexConfig.libraryId) {
-    return { error: NextResponse.json(
-      { error: 'NoLibraryConfigured', message: 'No Plex library ID configured' },
-      { status: 400 }) };
-  }
-  return plexConfig.libraryId;
-}
-
 async function getLibraryAudiobooks(req: AuthenticatedRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -59,11 +43,12 @@ async function getLibraryAudiobooks(req: AuthenticatedRequest) {
     const pageSizeRaw = parseInt(searchParams.get('pageSize') || '24', 10) || 24;
     const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
     const search = (searchParams.get('search') || '').trim();
-    const sort = (searchParams.get('sort') || 'addedAt_desc') as Sort;
+    const sortRaw = searchParams.get('sort') || 'addedAt_desc';
+    const sort: Sort = isSort(sortRaw) ? sortRaw : 'addedAt_desc';
 
-    const libraryIdOrError = await resolveLibraryId();
-    if (typeof libraryIdOrError !== 'string') return libraryIdOrError.error;
-    const libraryId = libraryIdOrError;
+    const lib = await resolveLibraryId();
+    if (!lib.ok) return lib.response;
+    const libraryId = lib.libraryId;
 
     const where: Prisma.PlexLibraryWhereInput = {
       plexLibraryId: libraryId,

@@ -46,11 +46,12 @@ function dedupeByTitle<T extends { title: string }>(items: T[]): T[] {
   });
 }
 
-export function useLibrarySeries(search: string = '') {
+export function useLibrarySeries(search: string = '', enabled: boolean = true) {
   const prevKeyRef = useRef(search);
 
-  const { data, error, size, setSize, isLoading, isValidating } = useSWRInfinite<LibrarySeriesPage>(
+  const { data, error, size, setSize, isValidating } = useSWRInfinite<LibrarySeriesPage>(
     (pageIndex, prevPageData) => {
+      if (!enabled) return null;
       if (prevPageData && !prevPageData.hasMore) return null;
       const qs = new URLSearchParams({
         page: String(pageIndex + 1),
