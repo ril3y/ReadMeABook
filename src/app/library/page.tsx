@@ -96,9 +96,11 @@ function LibraryPageContent() {
     return () => clearTimeout(timer);
   }, [query, tab, router]);
 
-  const books = useLibraryAudiobooks(debouncedQuery);
-  const authors = useLibraryAuthors(debouncedQuery);
-  const series = useLibrarySeries(debouncedQuery);
+  // Lazy-load tabs: only the active tab actually fetches. Avoids three
+  // concurrent API calls on first mount when the user only sees one tab.
+  const books   = useLibraryAudiobooks(debouncedQuery, 'addedAt_desc', tab === 'books');
+  const authors = useLibraryAuthors(debouncedQuery, tab === 'authors');
+  const series  = useLibrarySeries(debouncedQuery, tab === 'series');
 
   const handleTabChange = useCallback((next: Tab) => {
     setTab(next);

@@ -18,31 +18,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { prisma } from '@/lib/db';
-import { getConfigService } from '@/lib/services/config.service';
+import { resolveLibraryId } from '@/lib/services/library-id';
 import { RMABLogger } from '@/lib/utils/logger';
 
 const logger = RMABLogger.create('API.Library.Series');
 
-async function resolveLibraryId(): Promise<string | { error: NextResponse }> {
-  const configService = getConfigService();
-  const backendMode = await configService.getBackendMode();
-  if (backendMode === 'audiobookshelf') {
-    const absLibraryId = await configService.get('audiobookshelf.library_id');
-    if (!absLibraryId) {
-      return { error: NextResponse.json(
-        { error: 'NoLibraryConfigured', message: 'No Audiobookshelf library ID configured' },
-        { status: 400 }) };
-    }
-    return absLibraryId;
-  }
-  const plexConfig = await configService.getPlexConfig();
-  if (!plexConfig.libraryId) {
-    return { error: NextResponse.json(
-      { error: 'NoLibraryConfigured', message: 'No Plex library ID configured' },
-      { status: 400 }) };
-  }
-  return plexConfig.libraryId;
-}
+// Chunk size for the IN-clause that joins owned ASINs against audiobooks.
+// Postgres handles 5k params fine, but MySQL's default max_allowed_packet
+// and Prisma's parameter limit can choke around very-large IN lists.
+const ASIN_BATCH = 1000;
 
 interface SeriesAggregate {
   title: string;
@@ -59,9 +43,9 @@ async function getLibrarySeries(req: AuthenticatedRequest) {
     const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
     const search = (searchParams.get('search') || '').trim().toLowerCase();
 
-    const libraryIdOrError = await resolveLibraryId();
-    if (typeof libraryIdOrError !== 'string') return libraryIdOrError.error;
-    const libraryId = libraryIdOrError;
+    const lib = await resolveLibraryId();
+    if (!lib.ok) return lib.response;
+    const libraryId = lib.libraryId;
 
     // Step 1: collect ASINs we own from plex_library
     const ownedRows = await prisma.plexLibrary.findMany({
@@ -84,19 +68,31 @@ async function getLibrarySeries(req: AuthenticatedRequest) {
       });
     }
 
-    // Step 2: find Audiobook rows with series data for those ASINs
-    const audiobookRows = await prisma.audiobook.findMany({
-      where: {
-        audibleAsin: { in: ownedAsins },
-        series: { not: null },
-      },
-      select: {
-        audibleAsin: true,
-        series: true,
-        seriesAsin: true,
-        coverArtUrl: true,
-      },
-    });
+    // Step 2: find Audiobook rows with series data for those ASINs.
+    // Chunk the IN list so we never push past DB parameter limits at 5k+ rows.
+    type AudiobookRow = {
+      audibleAsin: string | null;
+      series: string | null;
+      seriesAsin: string | null;
+      coverArtUrl: string | null;
+    };
+    const audiobookRows: AudiobookRow[] = [];
+    for (let i = 0; i < ownedAsins.length; i += ASIN_BATCH) {
+      const batch = ownedAsins.slice(i, i + ASIN_BATCH);
+      const rows = await prisma.audiobook.findMany({
+        where: {
+          audibleAsin: { in: batch },
+          series: { not: null },
+        },
+        select: {
+          audibleAsin: true,
+          series: true,
+          seriesAsin: true,
+          coverArtUrl: true,
+        },
+      });
+      audiobookRows.push(...rows);
+    }
 
     // Step 3: aggregate by series name (case-insensitive)
     const aggMap = new Map<string, SeriesAggregate>();

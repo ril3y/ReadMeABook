@@ -38,11 +38,12 @@ function dedupeByName<T extends { name: string }>(items: T[]): T[] {
   });
 }
 
-export function useLibraryAuthors(search: string = '') {
+export function useLibraryAuthors(search: string = '', enabled: boolean = true) {
   const prevKeyRef = useRef(search);
 
-  const { data, error, size, setSize, isLoading, isValidating } = useSWRInfinite<LibraryAuthorsPage>(
+  const { data, error, size, setSize, isValidating } = useSWRInfinite<LibraryAuthorsPage>(
     (pageIndex, prevPageData) => {
+      if (!enabled) return null;
       if (prevPageData && !prevPageData.hasMore) return null;
       const qs = new URLSearchParams({
         page: String(pageIndex + 1),

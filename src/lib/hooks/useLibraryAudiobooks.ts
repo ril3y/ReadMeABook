@@ -34,11 +34,18 @@ function dedupeByAsin<T extends { asin: string }>(items: T[]): T[] {
   });
 }
 
-export function useLibraryAudiobooks(search: string = '', sort: string = 'addedAt_desc') {
+export function useLibraryAudiobooks(
+  search: string = '',
+  sort: string = 'addedAt_desc',
+  enabled: boolean = true,
+) {
   const prevKeyRef = useRef(`${search}|${sort}`);
 
-  const { data, error, size, setSize, isLoading, isValidating } = useSWRInfinite<LibraryAudiobooksPage>(
+  const { data, error, size, setSize, isValidating } = useSWRInfinite<LibraryAudiobooksPage>(
     (pageIndex, prevPageData) => {
+      // Returning null disables the fetch — used by /library to lazy-load
+      // inactive tabs so we don't fire three concurrent requests on mount.
+      if (!enabled) return null;
       if (prevPageData && !prevPageData.hasMore) return null;
       const qs = new URLSearchParams({
         page: String(pageIndex + 1),
