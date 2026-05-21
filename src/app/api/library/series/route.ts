@@ -23,8 +23,6 @@ import type { Prisma } from '@/generated/prisma';
 
 const logger = RMABLogger.create('API.Library.Series');
 
-const ASIN_BATCH = 1000;
-
 interface SeriesAggregate {
   title: string;
   bookCount: number;
@@ -60,27 +58,23 @@ async function getLibrarySeries(req: AuthenticatedRequest) {
     // from any matching audiobooks row, so series tiles can deep-link to
     // /series/[asin] when available. This is a best-effort lookup — series
     // without any Audiobook row simply omit the ASIN and fall back to a
-    // text search link in the UI.
-    type AbRow = { audibleAsin: string | null; series: string | null; seriesAsin: string | null; coverArtUrl: string | null };
-    const audiobookRows: AbRow[] = [];
-    if (seriesNames.length > 0) {
-      // Filter the audiobooks table by name; capped to chunks to stay under
-      // any DB parameter limit at large libraries.
-      for (let i = 0; i < seriesNames.length; i += ASIN_BATCH) {
-        const batch = seriesNames.slice(i, i + ASIN_BATCH);
-        const rows = await prisma.audiobook.findMany({
-          where: { series: { in: batch }, seriesAsin: { not: null } },
-          select: { audibleAsin: true, series: true, seriesAsin: true, coverArtUrl: true },
-        });
-        audiobookRows.push(...rows);
-      }
-    }
-    const seriesAsinByName = new Map<string, { asin: string; coverArtUrl: string | null }>();
+    // text search link in the UI. Distinct series names cap at a few
+    // hundred per personal library, so one round-trip is fine.
+    //
+    // Lookup key is lowercased so case drift between scans (ABS title-cased
+    // vs Audiobook entered through a different code path) doesn't lose the
+    // enrichment match.
+    type AbRow = { series: string | null; seriesAsin: string | null; coverArtUrl: string | null };
+    const audiobookRows: AbRow[] = seriesNames.length === 0 ? [] : await prisma.audiobook.findMany({
+      where: { series: { in: seriesNames }, seriesAsin: { not: null } },
+      select: { series: true, seriesAsin: true, coverArtUrl: true },
+    });
+    const enrichByName = new Map<string, { asin: string; coverArtUrl: string | null }>();
     for (const r of audiobookRows) {
       if (!r.series || !r.seriesAsin) continue;
-      const key = r.series.trim();
-      if (!seriesAsinByName.has(key)) {
-        seriesAsinByName.set(key, { asin: r.seriesAsin, coverArtUrl: r.coverArtUrl });
+      const key = r.series.trim().toLowerCase();
+      if (!enrichByName.has(key)) {
+        enrichByName.set(key, { asin: r.seriesAsin, coverArtUrl: r.coverArtUrl });
       }
     }
 
@@ -88,7 +82,7 @@ async function getLibrarySeries(req: AuthenticatedRequest) {
       .filter(g => !!g.series && g.series.trim().length > 0)
       .map(g => {
         const key = g.series!.trim();
-        const enriched = seriesAsinByName.get(key);
+        const enriched = enrichByName.get(key.toLowerCase());
         return {
           title: key,
           bookCount: g._count._all,
