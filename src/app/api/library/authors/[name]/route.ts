@@ -20,8 +20,6 @@ import { RMABLogger } from '@/lib/utils/logger';
 
 const logger = RMABLogger.create('API.Library.AuthorDetail');
 
-const ASIN_BATCH = 1000;
-
 async function getAuthorDetail(
   req: AuthenticatedRequest,
   { params }: { params: Promise<{ name: string }> }
@@ -133,20 +131,18 @@ async function getAuthorDetail(
     // Best-effort enrichment: pull seriesAsin + coverArtUrl from `audiobook`
     // (the request-side cache) so series tiles can deep-link to /series/[asin]
     // when a row exists. Missing rows just fall back to a name-only tile.
+    // Per-author series count caps at low double digits so one round-trip
+    // is fine; the lookup key is lowercased so case drift between scans
+    // doesn't lose the enrichment match.
     type AbRow = { series: string | null; seriesAsin: string | null; coverArtUrl: string | null };
-    const audiobookRows: AbRow[] = [];
-    for (let i = 0; i < seriesNames.length; i += ASIN_BATCH) {
-      const batch = seriesNames.slice(i, i + ASIN_BATCH);
-      const rows2 = await prisma.audiobook.findMany({
-        where: { series: { in: batch }, seriesAsin: { not: null } },
-        select: { series: true, seriesAsin: true, coverArtUrl: true },
-      });
-      audiobookRows.push(...rows2);
-    }
+    const audiobookRows: AbRow[] = seriesNames.length === 0 ? [] : await prisma.audiobook.findMany({
+      where: { series: { in: seriesNames }, seriesAsin: { not: null } },
+      select: { series: true, seriesAsin: true, coverArtUrl: true },
+    });
     const enrichByName = new Map<string, { asin: string; coverArtUrl: string | null }>();
     for (const r of audiobookRows) {
       if (!r.series || !r.seriesAsin) continue;
-      const key = r.series.trim();
+      const key = r.series.trim().toLowerCase();
       if (!enrichByName.has(key)) {
         enrichByName.set(key, { asin: r.seriesAsin, coverArtUrl: r.coverArtUrl });
       }
@@ -156,7 +152,7 @@ async function getAuthorDetail(
       .filter(g => !!g.series && g.series.trim().length > 0)
       .map(g => {
         const key = g.series!.trim();
-        const enriched = enrichByName.get(key);
+        const enriched = enrichByName.get(key.toLowerCase());
         return {
           title: key,
           bookCount: g._count._all,

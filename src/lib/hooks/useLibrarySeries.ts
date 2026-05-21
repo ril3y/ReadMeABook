@@ -33,12 +33,16 @@ export function useLibrarySeries(search: string = '', enabled: boolean = true) {
     ? `/api/library/series${search ? `?search=${encodeURIComponent(search)}` : ''}`
     : null;
 
+  // See useLibraryAuthors for the keepPreviousData rationale — tab
+  // switching sets `enabled=false` and would otherwise drop the cached
+  // list, producing a skeleton flash when the user comes back.
   const { data, error, isLoading } = useSWR<LibrarySeriesResponse>(
     endpoint,
     authenticatedFetcher,
     {
       revalidateOnFocus: false,
       dedupingInterval: 30000,
+      keepPreviousData: true,
     }
   );
 

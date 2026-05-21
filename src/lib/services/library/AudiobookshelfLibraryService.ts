@@ -193,20 +193,28 @@ export class AudiobookshelfLibraryService implements ILibraryService {
  *   "Twilight of the Gods, Book 1"  → ("Twilight of the Gods", "1")
  *   "Twilight of the Gods"          → ("Twilight of the Gods", undefined)
  *   ""                              → (undefined, undefined)
+ *
+ * The hash separator requires a preceding space — names like
+ * "Murder #1: The Beginning #2" keep their first `#` intact and only
+ * the trailing `#N` is treated as the sequence. Non-numeric trailers
+ * (e.g. `#Prequel`) are left as part of the name. Sequence is restricted
+ * to integer or single-decimal forms (`1`, `1.5`) so multi-dot junk like
+ * `1.2.3` falls through to the name-only branch.
  */
 function parseABSSeriesName(raw?: string): { name?: string; sequence?: string } {
   if (!raw) return {};
   const trimmed = raw.trim();
   if (!trimmed) return {};
 
-  // "Name #1.5"
-  const hashMatch = trimmed.match(/^(.+?)\s*#\s*([\d.]+)\s*$/);
+  // "Name #1" or "Name #1.5" — preceding whitespace required so that
+  // names containing their own `#` are not split mid-title.
+  const hashMatch = trimmed.match(/^(.+?)\s+#\s*(\d+(?:\.\d+)?)\s*$/);
   if (hashMatch) {
     return { name: hashMatch[1].trim(), sequence: hashMatch[2] };
   }
 
-  // "Name, Book 1"
-  const bookMatch = trimmed.match(/^(.+?),\s*Book\s*([\d.]+)\s*$/i);
+  // "Name, Book 1" or "Name, Book 1.5"
+  const bookMatch = trimmed.match(/^(.+?),\s*Book\s+(\d+(?:\.\d+)?)\s*$/i);
   if (bookMatch) {
     return { name: bookMatch[1].trim(), sequence: bookMatch[2] };
   }
