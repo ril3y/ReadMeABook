@@ -94,6 +94,10 @@ export async function processScanPlex(payload: ScanPlexPayload): Promise<any> {
               year: item.year || existing.year,
               asin: item.asin || existing.asin,  // Store ASIN from library backend
               isbn: item.isbn || existing.isbn,  // Store ISBN from library backend
+              // Series fields are nullable — overwrite directly so ABS edits that
+              // remove a book from a series propagate (don't OR-coalesce a clear away).
+              series: item.series ?? null,
+              seriesPart: item.seriesPart ?? null,
               thumbUrl: item.coverUrl || existing.thumbUrl,
               plexLibraryId: targetLibraryId,
               plexRatingKey: item.id || existing.plexRatingKey,
@@ -136,6 +140,8 @@ export async function processScanPlex(payload: ScanPlexPayload): Promise<any> {
               year: item.year,
               asin: item.asin,  // Store ASIN from library backend (Plex or Audiobookshelf)
               isbn: item.isbn,  // Store ISBN from library backend
+              series: item.series ?? null,
+              seriesPart: item.seriesPart ?? null,
               thumbUrl: item.coverUrl,
               plexLibraryId: targetLibraryId,
               addedAt: item.addedAt,

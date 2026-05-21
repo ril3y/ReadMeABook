@@ -117,38 +117,54 @@ async function getAuthorDetail(
       };
     });
 
-    // Step 3: derive series for this author by joining Audiobook on ASIN.
-    const ownedAsins = Array.from(new Set(
-      rows.map(r => r.asin).filter((a): a is string => !!a)
-    ));
-    interface SeriesAgg { title: string; bookCount: number; asin: string | null; coverArtUrl?: string }
-    const aggMap = new Map<string, SeriesAgg>();
-    for (let i = 0; i < ownedAsins.length; i += ASIN_BATCH) {
-      const batch = ownedAsins.slice(i, i + ASIN_BATCH);
-      const audiobookRows = await prisma.audiobook.findMany({
-        where: { audibleAsin: { in: batch }, series: { not: null } },
-        select: { audibleAsin: true, series: true, seriesAsin: true, coverArtUrl: true },
+    // Step 3: aggregate series for this author directly from plex_library —
+    // the same source of truth used by the series list endpoint. This avoids
+    // the prior JOIN through `audiobook` that undercounted any book never
+    // requested through RMAB (only requested books have an Audiobook row).
+    const seriesGroups = await prisma.plexLibrary.groupBy({
+      by: ['series'],
+      where: { plexLibraryId: libraryId, author, series: { not: null } },
+      _count: { _all: true },
+    });
+    const seriesNames = seriesGroups
+      .map(g => g.series)
+      .filter((s): s is string => !!s && s.trim().length > 0);
+
+    // Best-effort enrichment: pull seriesAsin + coverArtUrl from `audiobook`
+    // (the request-side cache) so series tiles can deep-link to /series/[asin]
+    // when a row exists. Missing rows just fall back to a name-only tile.
+    type AbRow = { series: string | null; seriesAsin: string | null; coverArtUrl: string | null };
+    const audiobookRows: AbRow[] = [];
+    for (let i = 0; i < seriesNames.length; i += ASIN_BATCH) {
+      const batch = seriesNames.slice(i, i + ASIN_BATCH);
+      const rows2 = await prisma.audiobook.findMany({
+        where: { series: { in: batch }, seriesAsin: { not: null } },
+        select: { series: true, seriesAsin: true, coverArtUrl: true },
       });
-      for (const a of audiobookRows) {
-        if (!a.series) continue;
-        const key = a.series.trim();
-        if (!key) continue;
-        const existing = aggMap.get(key);
-        if (existing) {
-          existing.bookCount += 1;
-          if (!existing.asin && a.seriesAsin) existing.asin = a.seriesAsin;
-          if (!existing.coverArtUrl && a.coverArtUrl) existing.coverArtUrl = a.coverArtUrl;
-        } else {
-          aggMap.set(key, {
-            title: key,
-            bookCount: 1,
-            asin: a.seriesAsin || null,
-            coverArtUrl: a.coverArtUrl || undefined,
-          });
-        }
+      audiobookRows.push(...rows2);
+    }
+    const enrichByName = new Map<string, { asin: string; coverArtUrl: string | null }>();
+    for (const r of audiobookRows) {
+      if (!r.series || !r.seriesAsin) continue;
+      const key = r.series.trim();
+      if (!enrichByName.has(key)) {
+        enrichByName.set(key, { asin: r.seriesAsin, coverArtUrl: r.coverArtUrl });
       }
     }
-    const series = Array.from(aggMap.values()).sort((a, b) => a.title.localeCompare(b.title));
+
+    const series = seriesGroups
+      .filter(g => !!g.series && g.series.trim().length > 0)
+      .map(g => {
+        const key = g.series!.trim();
+        const enriched = enrichByName.get(key);
+        return {
+          title: key,
+          bookCount: g._count._all,
+          asin: enriched?.asin ?? null,
+          coverArtUrl: enriched?.coverArtUrl ?? undefined,
+        };
+      })
+      .sort((a, b) => a.title.localeCompare(b.title));
 
     return NextResponse.json({
       success: true,

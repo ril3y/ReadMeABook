@@ -113,27 +113,16 @@ function LibraryPageContent() {
     setTab(next);
   }, []);
 
-  // Infinite-scroll sentinels (one per tab; only the active tab is observed).
-  const booksSentinelRef   = useRef<HTMLDivElement>(null);
-  const authorsSentinelRef = useRef<HTMLDivElement>(null);
-  const seriesSentinelRef  = useRef<HTMLDivElement>(null);
+  // Infinite-scroll sentinel for the Books tab only. Authors and Series
+  // are returned in full from a single API call (small lists) so they
+  // don't need pagination — that's also what makes the A-Z jump rail
+  // accurate from first paint.
+  const booksSentinelRef = useRef<HTMLDivElement>(null);
   useInfiniteScroll({
     ref: booksSentinelRef,
     hasMore: tab === 'books' && books.hasMore,
     isLoading: books.isLoadingMore,
     onLoadMore: books.loadMore,
-  });
-  useInfiniteScroll({
-    ref: authorsSentinelRef,
-    hasMore: tab === 'authors' && authors.hasMore,
-    isLoading: authors.isLoadingMore,
-    onLoadMore: authors.loadMore,
-  });
-  useInfiniteScroll({
-    ref: seriesSentinelRef,
-    hasMore: tab === 'series' && series.hasMore,
-    isLoading: series.isLoadingMore,
-    onLoadMore: series.loadMore,
   });
 
   // Jump-to-letter: scroll the first item whose data-letter matches into view.
@@ -314,20 +303,11 @@ function LibraryPageContent() {
                       : 'No authors found in your library'}
                   </div>
                 ) : (
-                  <>
-                    <div data-grid="authors" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
-                      {authors.authors.map(a => (
-                        <LibraryAuthorTile key={a.name} author={a} />
-                      ))}
-                    </div>
-                    {authors.hasMore && (
-                      <div ref={authorsSentinelRef} className="h-12 flex items-center justify-center">
-                        {authors.isLoadingMore && (
-                          <span className="text-sm text-gray-500 dark:text-gray-400">Loading more…</span>
-                        )}
-                      </div>
-                    )}
-                  </>
+                  <div data-grid="authors" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
+                    {authors.authors.map(a => (
+                      <LibraryAuthorTile key={a.name} author={a} />
+                    ))}
+                  </div>
                 )}
               </div>
               {authors.authors.length > 0 && (
@@ -362,20 +342,11 @@ function LibraryPageContent() {
                     </p>
                   </div>
                 ) : (
-                  <>
-                    <div data-grid="series" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
-                      {series.series.map(s => (
-                        <LibrarySeriesTile key={s.title} series={s} />
-                      ))}
-                    </div>
-                    {series.hasMore && (
-                      <div ref={seriesSentinelRef} className="h-12 flex items-center justify-center">
-                        {series.isLoadingMore && (
-                          <span className="text-sm text-gray-500 dark:text-gray-400">Loading more…</span>
-                        )}
-                      </div>
-                    )}
-                  </>
+                  <div data-grid="series" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 scroll-mt-32">
+                    {series.series.map(s => (
+                      <LibrarySeriesTile key={s.title} series={s} />
+                    ))}
+                  </div>
                 )}
               </div>
               {series.series.length > 0 && (

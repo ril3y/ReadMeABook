@@ -164,6 +164,7 @@ export class AudiobookshelfLibraryService implements ILibraryService {
 
   private mapABSItemToLibraryItem(item: ABSLibraryItem): LibraryItem {
     const metadata = item.media.metadata;
+    const { name: series, sequence: seriesPart } = parseABSSeriesName(metadata.seriesName);
     return {
       id: item.id,
       externalId: item.id,  // ABS item ID is the external ID
@@ -176,8 +177,39 @@ export class AudiobookshelfLibraryService implements ILibraryService {
       asin: metadata.asin,
       isbn: metadata.isbn,
       year: metadata.publishedYear ? parseInt(metadata.publishedYear) : undefined,
+      series,
+      seriesPart,
       addedAt: new Date(item.addedAt),
       updatedAt: new Date(item.updatedAt),
     };
   }
+}
+
+/**
+ * Parse ABS's flattened `seriesName` into (name, sequence).
+ * ABS minified-list responses pack series as one string. Known shapes:
+ *   "Twilight of the Gods #1"       → ("Twilight of the Gods", "1")
+ *   "Twilight of the Gods #1.5"     → ("Twilight of the Gods", "1.5")
+ *   "Twilight of the Gods, Book 1"  → ("Twilight of the Gods", "1")
+ *   "Twilight of the Gods"          → ("Twilight of the Gods", undefined)
+ *   ""                              → (undefined, undefined)
+ */
+function parseABSSeriesName(raw?: string): { name?: string; sequence?: string } {
+  if (!raw) return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+
+  // "Name #1.5"
+  const hashMatch = trimmed.match(/^(.+?)\s*#\s*([\d.]+)\s*$/);
+  if (hashMatch) {
+    return { name: hashMatch[1].trim(), sequence: hashMatch[2] };
+  }
+
+  // "Name, Book 1"
+  const bookMatch = trimmed.match(/^(.+?),\s*Book\s*([\d.]+)\s*$/i);
+  if (bookMatch) {
+    return { name: bookMatch[1].trim(), sequence: bookMatch[2] };
+  }
+
+  return { name: trimmed };
 }

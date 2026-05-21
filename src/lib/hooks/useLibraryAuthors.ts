@@ -2,14 +2,15 @@
  * Component: Library Authors Fetching Hook
  * Documentation: documentation/frontend/components.md
  *
- * Paginated fetch of distinct authors from the owned library.
- * Uses /api/library/authors. Mirrors the useLibraryAudiobooks pattern.
+ * Single-shot fetch of distinct authors from the owned library.
+ * Personal libraries top out at a few thousand authors so we return
+ * them all in one response — required so the A-Z jump index is
+ * accurate from the first paint (no "scroll to make Z clickable").
  */
 
 'use client';
 
-import { useRef, useEffect, useCallback } from 'react';
-import useSWRInfinite from 'swr/infinite';
+import useSWR from 'swr';
 import { authenticatedFetcher } from '@/lib/utils/api';
 
 export interface LibraryAuthor {
@@ -17,75 +18,30 @@ export interface LibraryAuthor {
   bookCount: number;
 }
 
-interface LibraryAuthorsPage {
+interface LibraryAuthorsResponse {
   success: boolean;
   authors: LibraryAuthor[];
   totalCount: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
-}
-
-const PAGE_SIZE = 48;
-
-function dedupeByName<T extends { name: string }>(items: T[]): T[] {
-  const seen = new Set<string>();
-  return items.filter(item => {
-    if (seen.has(item.name)) return false;
-    seen.add(item.name);
-    return true;
-  });
 }
 
 export function useLibraryAuthors(search: string = '', enabled: boolean = true) {
-  const prevKeyRef = useRef(search);
+  const endpoint = enabled
+    ? `/api/library/authors${search ? `?search=${encodeURIComponent(search)}` : ''}`
+    : null;
 
-  const { data, error, size, setSize, isValidating } = useSWRInfinite<LibraryAuthorsPage>(
-    (pageIndex, prevPageData) => {
-      if (!enabled) return null;
-      if (prevPageData && !prevPageData.hasMore) return null;
-      const qs = new URLSearchParams({
-        page: String(pageIndex + 1),
-        pageSize: String(PAGE_SIZE),
-      });
-      if (search) qs.set('search', search);
-      return `/api/library/authors?${qs.toString()}`;
-    },
+  const { data, error, isLoading } = useSWR<LibraryAuthorsResponse>(
+    endpoint,
     authenticatedFetcher,
     {
       revalidateOnFocus: false,
       dedupingInterval: 30000,
-      revalidateFirstPage: false,
     }
   );
 
-  useEffect(() => {
-    if (search !== prevKeyRef.current) {
-      prevKeyRef.current = search;
-      setSize(1);
-    }
-  }, [search, setSize]);
-
-  const authors = data
-    ? dedupeByName(data.flatMap(page => page?.authors || []))
-    : [];
-  const totalCount = data?.[0]?.totalCount || 0;
-  const hasMore = !!(data && data.length > 0 && data[data.length - 1]?.hasMore);
-  const isLoadingInitial = !data && !error;
-  const isLoadingMore = !!(data && typeof data[size - 1] === 'undefined' && isValidating);
-
-  const loadMore = useCallback(() => {
-    setSize(prev => prev + 1);
-  }, [setSize]);
-
   return {
-    authors,
-    totalCount,
-    hasMore,
-    isLoading: isLoadingInitial,
-    isLoadingMore,
-    loadMore,
+    authors: data?.authors ?? [],
+    totalCount: data?.totalCount ?? 0,
+    isLoading,
     error,
   };
 }
