@@ -29,6 +29,8 @@ export interface LibraryItem {
   asin?: string;
   isbn?: string;
   year?: number;
+  series?: string;        // Series name without sequence ("Twilight of the Gods")
+  seriesPart?: string;    // Sequence within the series ("1", "1.5", etc.)
   addedAt: Date;
   updatedAt: Date;
 }

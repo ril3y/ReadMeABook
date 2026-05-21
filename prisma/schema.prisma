@@ -140,6 +140,12 @@ model PlexLibrary {
   asin String? // Audible ASIN - extracted from Plex GUID or stored directly from ABS
   isbn String? // ISBN (10 or 13) - for additional matching capability
 
+  // Series metadata copied from the backend (ABS/Plex) during scan.
+  // Stored here so the /api/library/series aggregation is a pure SQL
+  // groupBy — no fragile cross-table JOIN, no undercounts.
+  series     String? // Series name (e.g., "Mistborn")
+  seriesPart String? @map("series_part") // Sequence within series (e.g., "1", "1.5", "Book 2")
+
   // File information
   filePath            String? @map("file_path") @db.Text
   thumbUrl            String? @map("thumb_url") @db.Text // Plex thumbnail URL
@@ -159,6 +165,7 @@ model PlexLibrary {
   @@index([plexLibraryId])
   @@index([asin])
   @@index([isbn])
+  @@index([series])
   @@map("plex_library")
 }
 
