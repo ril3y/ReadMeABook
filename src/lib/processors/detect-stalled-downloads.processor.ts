@@ -35,7 +35,13 @@ export interface DetectStalledDownloadsPayload {
 }
 
 const DEFAULT_TIMEOUT_DAYS = 7;
+// Stage 1 cap stays conservative — each swap fires a fresh indexer search,
+// so 50/hr is the right ceiling to avoid Prowlarr storms.
 const DEFAULT_MAX_PER_RUN = 50;
+// Stage 2 is pure qBT cleanup (no DB writes beyond logging, no indexer load),
+// so it can go much higher. 500/run drains a typical post-migration backlog
+// of 1.5–2k orphans in 3–4 passes.
+const STAGE2_MAX_PER_RUN = 500;
 const DEFAULT_MAX_PROGRESS = 50; // Only swap if progress is BELOW this percent
 const DEFAULT_GLOBAL_THRESHOLD = 3; // Promote to global block after N independent stalls
 
@@ -310,8 +316,9 @@ export async function processDetectStalledDownloads(
     //       (c) Owned by a request still in `downloading` -> Stage 1 already
     //           handled it; skip to avoid double-action
     //
-    // The same DEFAULT_MAX_PER_RUN cap applies so a 2000-orphan deploy
-    // doesn't hammer qBT in one pass.
+    // Cap is STAGE2_MAX_PER_RUN (500 by default) — high enough to drain a
+    // post-migration backlog in a few hourly passes, low enough that one run
+    // doesn't lock qBT's UI under a torrent of REST calls.
     // -----------------------------------------------------------------------
 
     let orphansDeleted = 0;
@@ -352,7 +359,7 @@ export async function processDetectStalledDownloads(
             if (dh.torrentHash) dhByHash.set(dh.torrentHash.toLowerCase(), dh);
           }
 
-          const cap = Math.min(candidates.length, DEFAULT_MAX_PER_RUN);
+          const cap = Math.min(candidates.length, STAGE2_MAX_PER_RUN);
           for (let i = 0; i < cap; i++) {
             const t = candidates[i];
             try {

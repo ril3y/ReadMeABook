@@ -305,7 +305,7 @@ function AdminStalledDownloadsContent() {
                   </table>
                   {data.counts.currentlyStalled > data.currentlyStalled.length && (
                     <div className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900">
-                      Showing first {data.currentlyStalled.length} of {data.counts.currentlyStalled}. Up to 50 are swapped per hourly pass.
+                      Showing first {data.currentlyStalled.length} of {data.counts.currentlyStalled}. Stage 1 swaps up to 50 per hourly pass; Stage 2 deletes up to 500 stale qBT torrents per pass.
                     </div>
                   )}
                 </div>
