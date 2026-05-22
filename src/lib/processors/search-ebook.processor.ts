@@ -353,22 +353,31 @@ async function searchIndexers(
     logger.info(`Filtered out ${preFilterCount - postFilterCount} results > 20 MB`);
   }
 
-  // Dual threshold filtering (same as audiobooks)
+  // Dual threshold filtering (same as audiobooks). Reads the configurable
+  // `indexer.min_quality_score` key — default 25 — instead of hardcoded 50.
+  // See search-indexers.processor.ts for the rationale.
+  const minQualityScore = await (async () => {
+    const raw = await configService.get('indexer.min_quality_score');
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    if (!Number.isFinite(n) || n < 0) return 25;
+    return Math.min(Math.max(n, 0), 100);
+  })();
+
   const filteredResults = rankedResults.filter(result =>
-    result.score >= 50 && result.finalScore >= 50
+    result.score >= minQualityScore && result.finalScore >= minQualityScore
   );
 
   const disqualifiedByNegativeBonus = rankedResults.filter(result =>
-    result.score >= 50 && result.finalScore < 50
+    result.score >= minQualityScore && result.finalScore < minQualityScore
   ).length;
 
-  logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (50/100 base + final)`);
+  logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
   if (disqualifiedByNegativeBonus > 0) {
     logger.info(`${disqualifiedByNegativeBonus} ebooks disqualified by negative flag bonuses`);
   }
 
   if (filteredResults.length === 0) {
-    logger.warn(`No quality matches found (all below 50/100)`);
+    logger.warn(`No quality matches found (all below ${minQualityScore}/100)`);
     return null;
   }
 

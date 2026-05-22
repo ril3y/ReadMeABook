@@ -51,6 +51,20 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       throw new Error('No indexers configured. Please configure indexers in settings.');
     }
 
+    // Quality-score threshold. Default lowered to 25 (was hardcoded 50)
+    // because AudioBookBay releases — often the only source for older
+    // audiobooks — routinely score below 50 due to low-bitrate M4B,
+    // pirate-style release names, and missing tags. 50/100 caused single-
+    // result searches to throw away the only available torrent.
+    // Admins can dial this back up (50-70) once they have multiple indexers
+    // configured and want strict quality filtering.
+    const minQualityScore = await (async () => {
+      const raw = await configService.get('indexer.min_quality_score');
+      const n = raw ? Number.parseInt(raw, 10) : NaN;
+      if (!Number.isFinite(n) || n < 0) return 25;
+      return Math.min(Math.max(n, 0), 100);
+    })();
+
     const indexersConfig = JSON.parse(indexersConfigStr);
 
     if (indexersConfig.length === 0) {
@@ -199,24 +213,24 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
     }
 
     // Dual threshold filtering:
-    // 1. Base score must be >= 50 (quality minimum)
-    // 2. Final score must be >= 50 (not disqualified by negative bonuses)
+    // 1. Base score must be >= minQualityScore (configured quality minimum)
+    // 2. Final score must be >= minQualityScore (not disqualified by negative bonuses)
     const filteredResults = rankedResults.filter(result =>
-      result.score >= 50 && result.finalScore >= 50
+      result.score >= minQualityScore && result.finalScore >= minQualityScore
     );
 
     const disqualifiedByNegativeBonus = rankedResults.filter(result =>
-      result.score >= 50 && result.finalScore < 50
+      result.score >= minQualityScore && result.finalScore < minQualityScore
     ).length;
 
-    logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (50/100 base + final)`);
+    logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
     if (disqualifiedByNegativeBonus > 0) {
       logger.info(`${disqualifiedByNegativeBonus} torrents disqualified by negative flag bonuses`);
     }
 
     if (filteredResults.length === 0) {
       // No quality results found - queue for re-search instead of failing
-      logger.warn(`No quality matches found for request ${requestId} (all below 50/100), marking as awaiting_search`);
+      logger.warn(`No quality matches found for request ${requestId} (all below ${minQualityScore}/100), marking as awaiting_search`);
 
       await prisma.request.update({
         where: { id: requestId },

@@ -181,6 +181,45 @@ export function IndexersTab({
           <div className="flex items-start gap-4">
             <div className="flex-1">
               <label
+                htmlFor="indexer-min-quality"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Minimum quality score to auto-grab
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-3">
+                Search results scoring below this threshold (0&ndash;100) are filtered out. Lower is more permissive &mdash; useful when AudioBookBay is your primary source (its releases often score 25&ndash;40 due to low bitrate / pirate-style naming). Raise to 50+ when you add higher-quality indexers (MAM, etc.).
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  id="indexer-min-quality"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={settings.indexerOptions.minQualityScore}
+                  onChange={(e) => {
+                    const raw = Number.parseInt(e.target.value, 10);
+                    const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 100) : 25;
+                    onChange({
+                      ...settings,
+                      indexerOptions: {
+                        ...settings.indexerOptions,
+                        minQualityScore: next,
+                      },
+                    });
+                  }}
+                  className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-600 dark:text-gray-400">/ 100</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mt-3">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label
                 htmlFor="stall-timeout-days"
                 className="block text-sm font-medium text-gray-900 dark:text-gray-100"
               >

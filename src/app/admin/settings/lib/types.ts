@@ -89,6 +89,15 @@ export interface IndexerOptionsSettings {
    * Backing config key: `indexer.skip_unreleased`.
    */
   skipUnreleased: boolean;
+  /**
+   * Minimum ranking score (0-100) for an indexer result to be considered
+   * for auto-grab. Default 25 (lowered from the original 50). ABB-style
+   * pirate releases routinely score 25-40 due to low bitrate, missing tags,
+   * and unconventional naming — raising this back to 50+ once you have
+   * higher-quality indexers configured (MAM, etc.).
+   * Backing config key: `indexer.min_quality_score`.
+   */
+  minQualityScore: number;
 }
 
 /**
