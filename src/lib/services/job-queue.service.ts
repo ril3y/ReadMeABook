@@ -28,6 +28,7 @@ export type JobType =
   | 'cleanup_seeded_torrents'
   | 'detect_stalled_downloads'
   | 'give_up_stuck_searches'
+  | 'find_missing_series_books'
   | 'monitor_rss_feeds'
   | 'sync_reading_shelves'
   | 'check_watched_lists'
@@ -122,6 +123,14 @@ export interface DetectStalledDownloadsPayload extends JobPayload {
 
 export interface GiveUpStuckSearchesPayload extends JobPayload {
   scheduledJobId?: string;
+}
+
+export interface FindMissingSeriesBooksPayload extends JobPayload {
+  scheduledJobId?: string;
+  /** Single-series mode: process only this series ASIN (manual API). */
+  seriesAsin?: string;
+  /** Override the watched_series owner (manual API). */
+  userId?: string;
 }
 
 export interface SyncShelvesPayload extends JobPayload {
@@ -423,6 +432,12 @@ export class JobQueueService {
       const { processGiveUpStuckSearches } = await import('../processors/give-up-stuck-searches.processor');
       const payloadWithJobId = await this.ensureJobRecord(job, 'give_up_stuck_searches');
       return await processGiveUpStuckSearches(payloadWithJobId);
+    });
+
+    this.queue.process('find_missing_series_books', 1, async (job: BullJob<FindMissingSeriesBooksPayload>) => {
+      const { processFindMissingSeriesBooks } = await import('../processors/find-missing-series-books.processor');
+      const payloadWithJobId = await this.ensureJobRecord(job, 'find_missing_series_books');
+      return await processFindMissingSeriesBooks(payloadWithJobId);
     });
 
     this.queue.process('sync_reading_shelves', 1, async (job: BullJob<SyncShelvesPayload>) => {
@@ -848,6 +863,23 @@ export class JobQueueService {
       {
         priority: 9,
       }
+    );
+  }
+
+  /**
+   * Add find-missing-series-books job (creates Requests for missing books in
+   * watched series). When seriesAsin+userId are passed, runs in single-series
+   * mode for manual "Fill gaps" UI button.
+   */
+  async addFindMissingSeriesBooksJob(opts: {
+    scheduledJobId?: string;
+    seriesAsin?: string;
+    userId?: string;
+  } = {}): Promise<string> {
+    return await this.addJob(
+      'find_missing_series_books',
+      opts as FindMissingSeriesBooksPayload,
+      { priority: 7 }
     );
   }
 
