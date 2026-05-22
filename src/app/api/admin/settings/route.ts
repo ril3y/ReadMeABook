@@ -96,6 +96,17 @@ export async function GET(request: NextRequest) {
           if (!Number.isFinite(n) || n < 0) return 25;
           return Math.min(Math.max(n, 0), 100);
         })(),
+        // Default 1 — require at least one alive peer with the complete file.
+        // 0 disables the post-rank filter entirely (dead torrents allowed).
+        // Must stay in lock-step with /api/admin/settings/indexer-options
+        // and the per-processor reads in search-indexers / search-ebook.
+        minSeeders: (() => {
+          const raw = configMap.get('indexer.min_seeders');
+          if (raw === undefined || raw === null || raw === '') return 1;
+          const n = Number.parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 0) return 1;
+          return Math.min(Math.max(n, 0), 100);
+        })(),
       },
       automation: {
         // Must stay in lock-step with /api/admin/settings/automation contracts
