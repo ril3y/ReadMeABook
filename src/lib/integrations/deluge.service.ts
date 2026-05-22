@@ -280,6 +280,14 @@ export class DelugeService implements IDownloadClient {
     logger.info(`Set label for torrent ${id}: ${category}`);
   }
 
+  /**
+   * List downloads stub — Deluge stall-orphan scanning is not yet implemented.
+   * Returns empty so the IDownloadClient contract is honored.
+   */
+  async listDownloads(_category?: string): Promise<DownloadInfo[]> {
+    return [];
+  }
+
   // =========================================================================
   // Internal Helpers
   // =========================================================================

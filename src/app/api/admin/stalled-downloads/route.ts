@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { prisma } from '@/lib/db';
 import { getConfigService } from '@/lib/services/config.service';
+import { getDownloadClientManager } from '@/lib/services/download-client-manager.service';
 import { RMABLogger } from '@/lib/utils/logger';
 
 const logger = RMABLogger.create('API.Admin.StalledDownloads');
@@ -149,6 +150,32 @@ export async function GET(request: NextRequest) {
           where: { status: 'downloading', deletedAt: null },
         });
 
+        // qBT-side counters — what Stage 2 will see on the next pass. Total
+        // torrents in the client + how many of those are past the cutoff and
+        // not actively making progress. Best-effort: if the client is down or
+        // missing, we report nulls and the UI shows '—'.
+        let qbtTotal: number | null = null;
+        let qbtStalledPastCutoff: number | null = null;
+        let qbtScanError: string | null = null;
+        try {
+          const clientManager = getDownloadClientManager(configService);
+          const torrentClient = await clientManager.getClientServiceForProtocol('torrent');
+          if (torrentClient) {
+            const allTorrents = await torrentClient.listDownloads();
+            qbtTotal = allTorrents.length;
+            qbtStalledPastCutoff = allTorrents.filter(t => {
+              if (!t.addedAt || t.addedAt >= cutoff) return false;
+              if (t.progress >= 1) return false;
+              if (t.status === 'failed') return true;
+              if (t.status === 'downloading' && t.downloadSpeed === 0) return true;
+              return false;
+            }).length;
+          }
+        } catch (err) {
+          qbtScanError = err instanceof Error ? err.message : String(err);
+          logger.warn('qBT-side scan failed for /admin/stalled-downloads', { error: qbtScanError });
+        }
+
         // Globally-blocked releases (cross-request). Group by releaseKey so
         // the UI shows one row per release even if multiple requests stalled
         // on it. Limited to top 50 by most-recent.
@@ -214,7 +241,10 @@ export async function GET(request: NextRequest) {
             activeDownloadingTotal,
             recentSwapsShown: recentSwaps.length,
             globallyBlockedReleases: globalByKey.size,
+            qbtTotal,
+            qbtStalledPastCutoff,
           },
+          qbtScanError,
           globallyBlocked,
           currentlyStalled: currentlyStalled.map((r) => {
             const dh = r.downloadHistory[0];

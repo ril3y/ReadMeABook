@@ -469,6 +469,14 @@ export class TransmissionService implements IDownloadClient {
     }
   }
 
+  /**
+   * List downloads stub — Transmission stall-orphan scanning is not yet
+   * implemented. Returns empty so the IDownloadClient contract is honored.
+   */
+  async listDownloads(_category?: string): Promise<DownloadInfo[]> {
+    return [];
+  }
+
   // =========================================================================
   // Internal Helpers
   // =========================================================================

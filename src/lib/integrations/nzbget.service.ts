@@ -422,6 +422,14 @@ export class NZBGetService implements IDownloadClient {
     // No-op: post-import category is scoped to torrent clients
   }
 
+  /**
+   * List downloads stub — Usenet stall-detection isn't wired through this
+   * processor today. Returns empty so the IDownloadClient contract is honored.
+   */
+  async listDownloads(_category?: string): Promise<DownloadInfo[]> {
+    return [];
+  }
+
   // =========================================================================
   // Category Management
   // =========================================================================

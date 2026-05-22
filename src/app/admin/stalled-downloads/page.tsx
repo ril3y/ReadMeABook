@@ -89,7 +89,10 @@ interface StalledData {
     activeDownloadingTotal: number;
     recentSwapsShown: number;
     globallyBlockedReleases: number;
+    qbtTotal: number | null;
+    qbtStalledPastCutoff: number | null;
   };
+  qbtScanError: string | null;
   currentlyStalled: StalledRequest[];
   recentSwaps: SwapEntry[];
   globallyBlocked: GlobalBlock[];
@@ -159,10 +162,12 @@ function AdminStalledDownloadsContent() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
               Stalled Downloads
             </h1>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 max-w-2xl">
-              Downloads stuck in <code className="text-xs">downloading</code> longer than the
-              configured timeout are auto-swapped: the torrent is deleted, the release is
-              blocked, and a fresh search is queued. Hourly background pass.
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 max-w-3xl">
+              Two-stage hourly pass. <strong>Stage 1</strong> swaps RMAB requests stuck in
+              {' '}<code className="text-xs">downloading</code> past the timeout (deletes torrent +
+              blocks release + queues new search). <strong>Stage 2</strong> scans qBT directly for
+              orphan / stale-linked torrents past the cutoff and deletes them with files &mdash;
+              this is what drains pre-existing qBT backlogs that RMAB never linked.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -197,30 +202,37 @@ function AdminStalledDownloadsContent() {
 
         {data && (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-              <StatPill
-                label="Timeout"
-                value={`${data.config.stallTimeoutDays}d`}
-              />
-              <StatPill
-                label="Swap below"
-                value={`${data.config.stallSwapMaxProgress}%`}
-              />
-              <StatPill
-                label="Currently stalled"
-                value={data.counts.currentlyStalled}
-                tone={data.counts.currentlyStalled > 0 ? 'amber' : 'green'}
-              />
-              <StatPill
-                label="Active downloads"
-                value={data.counts.activeDownloadingTotal}
-              />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <StatPill label="Timeout" value={`${data.config.stallTimeoutDays}d`} />
+              <StatPill label="Swap below" value={`${data.config.stallSwapMaxProgress}%`} />
               <StatPill
                 label="Globally blocked"
                 value={data.counts.globallyBlockedReleases}
                 tone={data.counts.globallyBlockedReleases > 0 ? 'red' : 'gray'}
               />
+              <StatPill label="Active downloads" value={data.counts.activeDownloadingTotal} />
             </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+              <StatPill
+                label="RMAB requests stalled (Stage 1)"
+                value={data.counts.currentlyStalled}
+                tone={data.counts.currentlyStalled > 0 ? 'amber' : 'green'}
+              />
+              <StatPill
+                label="qBT stalled (Stage 2)"
+                value={data.counts.qbtStalledPastCutoff ?? '—'}
+                tone={(data.counts.qbtStalledPastCutoff ?? 0) > 0 ? 'amber' : 'green'}
+              />
+              <StatPill
+                label="qBT total torrents"
+                value={data.counts.qbtTotal ?? '—'}
+              />
+            </div>
+            {data.qbtScanError && (
+              <div className="mb-6 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-sm text-amber-800 dark:text-amber-200">
+                qBT-side scan unavailable: {data.qbtScanError}. Stage 2 will be skipped on the next pass.
+              </div>
+            )}
 
             <div className="mb-6 p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm">
               <div className="flex flex-col gap-1 text-gray-700 dark:text-gray-300">

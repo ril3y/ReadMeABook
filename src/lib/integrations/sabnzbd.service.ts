@@ -845,6 +845,15 @@ export class SABnzbdService implements IDownloadClient {
   }
 
   /**
+   * List downloads stub — Usenet stall-detection isn't wired through this
+   * processor today. Returns empty so the IDownloadClient contract is
+   * honored and the stalled-downloads scanner can iterate clients uniformly.
+   */
+  async listDownloads(_category?: string): Promise<DownloadInfo[]> {
+    return [];
+  }
+
+  /**
    * Map NZBInfo to the unified DownloadInfo format.
    */
   private mapNZBInfoToDownloadInfo(nzb: NZBInfo): DownloadInfo {

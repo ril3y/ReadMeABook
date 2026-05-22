@@ -1132,6 +1132,12 @@ export class QBittorrentService implements IDownloadClient {
     return this.deleteTorrent(id, deleteFiles);
   }
 
+  /** List all downloads via the unified interface (optional category filter). */
+  async listDownloads(category?: string): Promise<DownloadInfo[]> {
+    const torrents = await this.getTorrents(category);
+    return torrents.map(t => this.mapTorrentToDownloadInfo(t));
+  }
+
   /**
    * Post-download cleanup via the unified interface.
    * No-op for qBittorrent — torrents continue seeding until the
@@ -1169,6 +1175,7 @@ export class QBittorrentService implements IDownloadClient {
       completedAt: torrent.completion_on > 0 ? new Date(torrent.completion_on * 1000) : undefined,
       seedingTime: torrent.seeding_time,
       ratio: torrent.ratio,
+      addedAt: torrent.added_on > 0 ? new Date(torrent.added_on * 1000) : undefined,
     };
   }
 
