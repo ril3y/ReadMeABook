@@ -116,6 +116,17 @@ function LibrarySeriesContent({ name }: { name: string }) {
   const headerDisagreesWithCatalog =
     usingCatalogView && headerMissing !== null && headerMissing > visibleMissing;
 
+  // Pick the books to render in the grid:
+  //   - If we have catalog data (seriesAsin resolved + scrape returned),
+  //     use that — it includes BOTH owned and missing books with isAvailable
+  //     set per row. Pass highlightMissing to grey + badge the missing ones.
+  //   - Otherwise fall back to the owned-only list from /api/library/series/[name].
+  const displayBooks: Audiobook[] = useMemo(() => {
+    if (catalogSeries?.books && catalogSeries.books.length > 0) return catalogSeries.books;
+    return books;
+  }, [catalogSeries, books]);
+  const usingCatalogView = !!catalogSeries?.books?.length;
+
   return (
     <main className="container mx-auto px-4 py-8 max-w-7xl space-y-6">
       <div>
