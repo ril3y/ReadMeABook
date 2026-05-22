@@ -22,7 +22,7 @@ const STALE_NAME_REWRITES: ReadonlyArray<{
   { type: 'plex_recently_added_check', staleName: 'Plex Recently Added Check', neutralName: 'Recently Added Check' },
 ];
 
-export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists';
+export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads';
 
 export interface ScheduledJob {
   id: string;
@@ -163,6 +163,13 @@ export class SchedulerService {
         type: 'check_watched_lists' as ScheduledJobType,
         schedule: '0 0 * * *', // Daily at midnight (every 24 hours)
         enabled: true, // Enable by default
+        payload: {},
+      },
+      {
+        name: 'Detect Stalled Downloads',
+        type: 'detect_stalled_downloads' as ScheduledJobType,
+        schedule: '0 * * * *', // Every hour
+        enabled: true, // Enable by default; timeout configurable via `automation.stall_timeout_days`
         payload: {},
       },
     ];
@@ -438,6 +445,9 @@ export class SchedulerService {
         break;
       case 'check_watched_lists':
         bullJobId = await this.triggerCheckWatchedLists(job);
+        break;
+      case 'detect_stalled_downloads':
+        bullJobId = await this.triggerDetectStalledDownloads(job);
         break;
       default:
         throw new Error(`Unknown job type: ${job.type}`);
@@ -726,6 +736,13 @@ export class SchedulerService {
    */
   private async triggerCheckWatchedLists(job: any): Promise<string> {
     return await this.jobQueue.addCheckWatchedListsJob(job.id);
+  }
+
+  /**
+   * Trigger detection of stalled downloads (auto-swap to backup release).
+   */
+  private async triggerDetectStalledDownloads(job: any): Promise<string> {
+    return await this.jobQueue.addDetectStalledDownloadsJob(job.id);
   }
 }
 
