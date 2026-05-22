@@ -29,6 +29,7 @@ export type JobType =
   | 'detect_stalled_downloads'
   | 'give_up_stuck_searches'
   | 'find_missing_series_books'
+  | 'backfill_series_catalog'
   | 'monitor_rss_feeds'
   | 'sync_reading_shelves'
   | 'check_watched_lists'
@@ -131,6 +132,10 @@ export interface FindMissingSeriesBooksPayload extends JobPayload {
   seriesAsin?: string;
   /** Override the watched_series owner (manual API). */
   userId?: string;
+}
+
+export interface BackfillSeriesCatalogPayload extends JobPayload {
+  scheduledJobId?: string;
 }
 
 export interface SyncShelvesPayload extends JobPayload {
@@ -438,6 +443,12 @@ export class JobQueueService {
       const { processFindMissingSeriesBooks } = await import('../processors/find-missing-series-books.processor');
       const payloadWithJobId = await this.ensureJobRecord(job, 'find_missing_series_books');
       return await processFindMissingSeriesBooks(payloadWithJobId);
+    });
+
+    this.queue.process('backfill_series_catalog', 1, async (job: BullJob<BackfillSeriesCatalogPayload>) => {
+      const { processBackfillSeriesCatalog } = await import('../processors/backfill-series-catalog.processor');
+      const payloadWithJobId = await this.ensureJobRecord(job, 'backfill_series_catalog');
+      return await processBackfillSeriesCatalog(payloadWithJobId);
     });
 
     this.queue.process('sync_reading_shelves', 1, async (job: BullJob<SyncShelvesPayload>) => {
@@ -879,6 +890,18 @@ export class JobQueueService {
     return await this.addJob(
       'find_missing_series_books',
       opts as FindMissingSeriesBooksPayload,
+      { priority: 7 }
+    );
+  }
+
+  /**
+   * Add backfill-series-catalog job (populates series_catalog rows for
+   * uncached series via Audnexus + Audible scraping).
+   */
+  async addBackfillSeriesCatalogJob(scheduledJobId?: string): Promise<string> {
+    return await this.addJob(
+      'backfill_series_catalog',
+      { scheduledJobId } as BackfillSeriesCatalogPayload,
       { priority: 7 }
     );
   }
