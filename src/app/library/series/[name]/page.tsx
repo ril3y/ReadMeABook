@@ -12,16 +12,19 @@
 
 'use client';
 
-import { use as usePromise, useState, useCallback } from 'react';
+import { use as usePromise, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/layout/Header';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
+import { LoadMoreBar } from '@/components/ui/LoadMoreBar';
 import { useLibrarySeriesDetail } from '@/lib/hooks/useLibrarySeriesDetail';
+import { useSeriesDetail } from '@/lib/hooks/useSeries';
 import { CardSizeControls } from '@/components/ui/CardSizeControls';
 import { SquareCoversToggle } from '@/components/ui/SquareCoversToggle';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { fetchWithAuth } from '@/lib/utils/api';
+import type { Audiobook } from '@/lib/hooks/useAudiobooks';
 
 interface PageProps {
   params: Promise<{ name: string }>;
@@ -30,6 +33,17 @@ interface PageProps {
 function LibrarySeriesContent({ name }: { name: string }) {
   const { series, books, bookCount, seriesAsin, totalBooks, author, isLoading, error } =
     useLibrarySeriesDetail(name);
+  // When we have a resolved seriesAsin, ALSO fetch the full Audible catalog
+  // (same hook the /series/[asin] page uses). Catalog books carry
+  // isAvailable flags set server-side by matching plex_library — so the
+  // resulting grid shows owned books normally + missing books grayed out
+  // with a red MISSING badge (highlightMissing on AudiobookGrid).
+  const {
+    series: catalogSeries,
+    hasMore: catalogHasMore,
+    isLoadingMore: catalogLoadingMore,
+    loadMore: loadMoreCatalog,
+  } = useSeriesDetail(seriesAsin);
   const { cardSize, setCardSize, squareCovers, setSquareCovers } = usePreferences();
 
   // Fill-gaps state: queues the find-missing-series-books processor in
@@ -76,6 +90,17 @@ function LibrarySeriesContent({ name }: { name: string }) {
   }
 
   const missing = totalBooks !== null ? Math.max(0, totalBooks - bookCount) : null;
+
+  // Pick the books to render in the grid:
+  //   - If we have catalog data (seriesAsin resolved + scrape returned),
+  //     use that — it includes BOTH owned and missing books with isAvailable
+  //     set per row. Pass highlightMissing to grey + badge the missing ones.
+  //   - Otherwise fall back to the owned-only list from /api/library/series/[name].
+  const displayBooks: Audiobook[] = useMemo(() => {
+    if (catalogSeries?.books && catalogSeries.books.length > 0) return catalogSeries.books;
+    return books;
+  }, [catalogSeries, books]);
+  const usingCatalogView = !!catalogSeries?.books?.length;
 
   return (
     <main className="container mx-auto px-4 py-8 max-w-7xl space-y-6">
@@ -159,20 +184,37 @@ function LibrarySeriesContent({ name }: { name: string }) {
       <section className="space-y-4">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            Books in your library
+            {usingCatalogView ? 'Books in this series' : 'Books in your library'}
           </h2>
+          {usingCatalogView && (
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              (greyed-out covers are missing from your library)
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-1">
             <SquareCoversToggle enabled={squareCovers} onToggle={setSquareCovers} />
             <CardSizeControls size={cardSize} onSizeChange={setCardSize} />
           </div>
         </div>
         <AudiobookGrid
-          audiobooks={books}
+          audiobooks={displayBooks}
           isLoading={isLoading}
           emptyMessage={`No books found in your library for "${series}"`}
           cardSize={cardSize}
           squareCovers={squareCovers}
+          highlightMissing={usingCatalogView}
         />
+        {/* Paginated catalog view: load remaining pages of the Audible
+            series so missing-book tiles aren't truncated at page 1. */}
+        {usingCatalogView && displayBooks.length > 0 && (
+          <LoadMoreBar
+            loadedCount={displayBooks.length}
+            totalCount={catalogSeries?.bookCount && catalogSeries.bookCount > 0 ? catalogSeries.bookCount : undefined}
+            hasMore={catalogHasMore}
+            isLoading={catalogLoadingMore}
+            onLoadMore={loadMoreCatalog}
+          />
+        )}
       </section>
     </main>
   );
