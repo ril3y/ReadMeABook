@@ -18,6 +18,13 @@ interface AudiobookGridProps {
   onRequestSuccess?: () => void;
   cardSize?: number; // 1-9, default 5
   squareCovers?: boolean; // true = square (1:1), false = rectangle (2:3)
+  /**
+   * Opt-in: render a visible "Missing" badge on books that are not in
+   * the library and not yet requested. Used by the series detail page
+   * so users can spot gaps in a series at a glance. Defaults to false
+   * so other grids (home, search, library) keep their cleaner look.
+   */
+  highlightMissing?: boolean;
 }
 
 // Grid classes with generous spacing for premium feel
@@ -44,6 +51,7 @@ export function AudiobookGrid({
   onRequestSuccess,
   cardSize = 5,
   squareCovers = false,
+  highlightMissing = false,
 }: AudiobookGridProps) {
   const gridClasses = getGridClasses(cardSize);
 
@@ -78,6 +86,7 @@ export function AudiobookGrid({
           audiobook={audiobook}
           onRequestSuccess={onRequestSuccess}
           squareCovers={squareCovers}
+          highlightMissing={highlightMissing}
         />
       ))}
     </div>
