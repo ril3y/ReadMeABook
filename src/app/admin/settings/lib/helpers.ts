@@ -121,6 +121,7 @@ export const saveTabSettings = async (
         body: JSON.stringify({
           skipUnreleased: settings.indexerOptions.skipUnreleased,
           minQualityScore: settings.indexerOptions.minQualityScore,
+          minSeeders: settings.indexerOptions.minSeeders,
         }),
       }).then(res => {
         if (!res.ok) throw new Error('Failed to save indexer options');

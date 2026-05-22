@@ -290,10 +290,15 @@ async function searchIndexers(
     logger.info(`Searching group ${i + 1}/${groups.length}: ${getGroupDescription(group)}`);
 
     try {
+      // Prowlarr-layer minSeeders kept at 0 for ebooks: we deliberately
+      // cast a wider net at the API layer (ebooks legitimately have
+      // fewer seeders than audiobooks). The authoritative gate is the
+      // post-rank `minSeeders` filter further down, which honors the
+      // admin's `indexer.min_seeders` setting and applies to ebooks too.
       const groupResults = await prowlarr.search(searchQuery, {
         categories: group.categories,
         indexerIds: group.indexerIds,
-        minSeeders: 0, // Ebooks may have fewer seeders
+        minSeeders: 0, // Ebooks may have fewer seeders — post-rank filter is the gate
         maxResults: 100,
       });
 
@@ -363,7 +368,19 @@ async function searchIndexers(
     return Math.min(Math.max(n, 0), 100);
   })();
 
-  const filteredResults = rankedResults.filter(result =>
+  // Seeder hard-floor — same semantics as the audiobook processor.
+  // Default 1 means "require at least one alive peer with the full file".
+  // NZB/Usenet results have seeders=undefined and are exempt; 0 disables.
+  // See search-indexers.processor.ts for the full rationale.
+  const minSeeders = await (async () => {
+    const raw = await configService.get('indexer.min_seeders');
+    if (raw === undefined || raw === null || raw === '') return 1;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 0) return 1;
+    return Math.min(Math.max(n, 0), 100);
+  })();
+
+  const qualityFilteredResults = rankedResults.filter(result =>
     result.score >= minQualityScore && result.finalScore >= minQualityScore
   );
 
@@ -371,13 +388,33 @@ async function searchIndexers(
     result.score >= minQualityScore && result.finalScore < minQualityScore
   ).length;
 
-  logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
+  logger.info(`Ranked ${rankedResults.length} results, ${qualityFilteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
   if (disqualifiedByNegativeBonus > 0) {
     logger.info(`${disqualifiedByNegativeBonus} ebooks disqualified by negative flag bonuses`);
   }
 
+  // Post-rank seeder filter. Same composition as audiobook search: must
+  // pass BOTH the quality gate AND the seeder gate.
+  const filteredResults = minSeeders > 0
+    ? qualityFilteredResults.filter(r => r.seeders === undefined || r.seeders >= minSeeders)
+    : qualityFilteredResults;
+
+  const droppedBySeeders = qualityFilteredResults.length - filteredResults.length;
+  if (droppedBySeeders > 0) {
+    logger.info(`Dropped ${droppedBySeeders} ebook candidate(s) below min-seeders threshold (${minSeeders})`);
+  }
+
   if (filteredResults.length === 0) {
-    logger.warn(`No quality matches found (all below ${minQualityScore}/100)`);
+    // Distinct failure modes: quality-only-failure vs. seeder-only-failure.
+    // For ebook indexer search the caller (`searchIndexers`) returns null in
+    // either case, which then chains through to `awaiting_search` upstream
+    // in processSearchEbook. Log enough detail that admins can diagnose
+    // which gate dropped the results.
+    if (qualityFilteredResults.length > 0) {
+      logger.warn(`All ${qualityFilteredResults.length} quality candidates dropped by min-seeders threshold (${minSeeders}) — all ebook torrents dead`);
+    } else {
+      logger.warn(`No quality matches found (all below ${minQualityScore}/100)`);
+    }
     return null;
   }
 

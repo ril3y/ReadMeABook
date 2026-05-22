@@ -65,6 +65,30 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       return Math.min(Math.max(n, 0), 100);
     })();
 
+    // Seeder hard-floor (default 1). Applied as a POST-rank filter so it
+    // composes cleanly on top of the quality-score gate: a torrent that
+    // scores 80/100 but has 0 seeders is still dead and will never
+    // complete, so we drop it before picking the top candidate.
+    //
+    // Why post-rank and not at the Prowlarr query layer?
+    //   1. Prowlarr's `minseeders` API param is enforced inconsistently
+    //      across indexer types — some Torznab implementations ignore it.
+    //   2. We want to LOG how many candidates each filter rejected; that
+    //      requires having all ranked results in hand.
+    //   3. NZB/Usenet results have `seeders === undefined` and must be
+    //      treated as "exempt" rather than "0 seeders" — handled in the
+    //      filter below by allowing undefined to pass through.
+    //
+    // 0 disables the filter entirely (use only if you genuinely want to
+    // grab dead torrents — e.g. cross-seeding workflows).
+    const minSeeders = await (async () => {
+      const raw = await configService.get('indexer.min_seeders');
+      if (raw === undefined || raw === null || raw === '') return 1;
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || n < 0) return 1;
+      return Math.min(Math.max(n, 0), 100);
+    })();
+
     const indexersConfig = JSON.parse(indexersConfigStr);
 
     if (indexersConfig.length === 0) {
@@ -116,7 +140,14 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
         const groupResults = await prowlarr.searchWithVariations(effectiveSearchTitle, audiobook.author, {
           categories: group.categories,
           indexerIds: group.indexerIds,
-          minSeeders: 1, // Only torrents with at least 1 seeder
+          // Belt-and-suspenders: pass the configured min-seeders hint to
+          // the Prowlarr layer too. The post-rank filter below is the
+          // authoritative gate (Prowlarr's minseeders is enforced
+          // inconsistently across Torznab indexers), but cutting noise
+          // at the API layer is still cheaper than transferring and
+          // ranking dead torrents. NB: passes the *raw* minSeeders;
+          // 0 disables the API-layer filter entirely.
+          minSeeders,
           maxResults: 100, // Limit per group
         });
 
@@ -215,7 +246,7 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
     // Dual threshold filtering:
     // 1. Base score must be >= minQualityScore (configured quality minimum)
     // 2. Final score must be >= minQualityScore (not disqualified by negative bonuses)
-    const filteredResults = rankedResults.filter(result =>
+    const qualityFilteredResults = rankedResults.filter(result =>
       result.score >= minQualityScore && result.finalScore >= minQualityScore
     );
 
@@ -223,20 +254,56 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       result.score >= minQualityScore && result.finalScore < minQualityScore
     ).length;
 
-    logger.info(`Ranked ${rankedResults.length} results, ${filteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
+    logger.info(`Ranked ${rankedResults.length} results, ${qualityFilteredResults.length} above threshold (${minQualityScore}/100 base + final)`);
     if (disqualifiedByNegativeBonus > 0) {
       logger.info(`${disqualifiedByNegativeBonus} torrents disqualified by negative flag bonuses`);
     }
 
+    // Post-rank seeder hard-floor. Drops candidates with fewer than
+    // `minSeeders` alive peers — those torrents will never complete
+    // regardless of how well they scored. NZB/Usenet results
+    // (`seeders === undefined`) are exempt: no peer-to-peer concept.
+    //
+    // The "all dropped" branch below is distinct from "0 results
+    // returned by Prowlarr" or "no quality matches" — surfacing that
+    // distinction in the request's errorMessage helps admins diagnose
+    // why a request keeps re-queuing (insufficient seeders vs. nothing
+    // indexed at all vs. all candidates blocklisted).
+    const filteredResults = minSeeders > 0
+      ? qualityFilteredResults.filter(r => r.seeders === undefined || r.seeders >= minSeeders)
+      : qualityFilteredResults;
+
+    const droppedBySeeders = qualityFilteredResults.length - filteredResults.length;
+    if (droppedBySeeders > 0) {
+      logger.info(`Dropped ${droppedBySeeders} candidate(s) below min-seeders threshold (${minSeeders})`);
+    }
+
     if (filteredResults.length === 0) {
-      // No quality results found - queue for re-search instead of failing
-      logger.warn(`No quality matches found for request ${requestId} (all below ${minQualityScore}/100), marking as awaiting_search`);
+      // Three distinct failure modes — surface which one we hit so the
+      // admin/UI can react appropriately:
+      //   A. Quality filter wiped everything (existing behavior).
+      //   B. Quality OK but seeder filter wiped everything (new — means
+      //      Prowlarr has releases for this book but none are alive).
+      //   C. Quality OK, seeder filter cleared everything because the
+      //      threshold is too aggressive (admin should consider lowering).
+      // All three end up in awaiting_search for the next rotation.
+      const allDroppedBySeeders =
+        qualityFilteredResults.length > 0 && filteredResults.length === 0;
+      const errorMessage = allDroppedBySeeders
+        ? `All ${qualityFilteredResults.length} quality candidates were below the min-seeders threshold (${minSeeders}). Will retry automatically — seeders may come back, or admin can lower the threshold.`
+        : 'No quality matches found. Will retry automatically.';
+
+      if (allDroppedBySeeders) {
+        logger.warn(`All candidates dropped due to insufficient seeders for request ${requestId} (threshold=${minSeeders}), marking as awaiting_search`);
+      } else {
+        logger.warn(`No quality matches found for request ${requestId} (all below ${minQualityScore}/100), marking as awaiting_search`);
+      }
 
       await prisma.request.update({
         where: { id: requestId },
         data: {
           status: 'awaiting_search',
-          errorMessage: 'No quality matches found. Will retry automatically.',
+          errorMessage,
           lastSearchAt: new Date(),
           updatedAt: new Date(),
         },
@@ -244,7 +311,9 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
 
       return {
         success: false,
-        message: 'No quality matches found, queued for re-search',
+        message: allDroppedBySeeders
+          ? 'All candidates below min-seeders threshold, queued for re-search'
+          : 'No quality matches found, queued for re-search',
         requestId,
       };
     }
