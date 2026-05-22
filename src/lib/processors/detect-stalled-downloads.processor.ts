@@ -27,6 +27,7 @@ import { getConfigService } from '../services/config.service';
 import { addAutoBlock } from '../services/blocklist.service';
 import { getDownloadClientManager } from '../services/download-client-manager.service';
 import { CLIENT_PROTOCOL_MAP, DownloadClientType } from '../interfaces/download-client.interface';
+import { normalizeReleaseKey } from '../utils/release-key';
 
 export interface DetectStalledDownloadsPayload {
   jobId?: string;
@@ -35,7 +36,16 @@ export interface DetectStalledDownloadsPayload {
 
 const DEFAULT_TIMEOUT_DAYS = 7;
 const DEFAULT_MAX_PER_RUN = 50;
+const DEFAULT_MAX_PROGRESS = 50; // Only swap if progress is BELOW this percent
+const DEFAULT_GLOBAL_THRESHOLD = 3; // Promote to global block after N independent stalls
+
 const CONFIG_KEY_TIMEOUT_DAYS = 'automation.stall_timeout_days';
+const CONFIG_KEY_MAX_PROGRESS = 'automation.stall_swap_max_progress';
+const CONFIG_KEY_GLOBAL_THRESHOLD = 'automation.global_block_threshold';
+
+// Reason prefix used by both the processor (when writing blocks) and the
+// counter (when finding past stalls of the same release).
+const STALL_REASON_PREFIX = 'Stalled timeout';
 
 function parseTimeoutDays(raw: string | null | undefined): number {
   if (!raw) return DEFAULT_TIMEOUT_DAYS;
@@ -43,6 +53,20 @@ function parseTimeoutDays(raw: string | null | undefined): number {
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_DAYS;
   // Clamp to sane bounds: minimum 1 day, max 365 days
   return Math.min(Math.max(Math.floor(n), 1), 365);
+}
+
+function parseMaxProgress(raw: string | null | undefined): number {
+  if (!raw) return DEFAULT_MAX_PROGRESS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_PROGRESS;
+  return Math.min(Math.max(Math.floor(n), 0), 100);
+}
+
+function parseGlobalThreshold(raw: string | null | undefined): number {
+  if (!raw) return DEFAULT_GLOBAL_THRESHOLD;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_GLOBAL_THRESHOLD;
+  return Math.min(Math.max(Math.floor(n), 1), 100);
 }
 
 export async function processDetectStalledDownloads(
@@ -53,20 +77,34 @@ export async function processDetectStalledDownloads(
 
   try {
     const configService = getConfigService();
-    const timeoutDays = parseTimeoutDays(await configService.get(CONFIG_KEY_TIMEOUT_DAYS));
+    const [timeoutRaw, maxProgressRaw, globalThresholdRaw] = await Promise.all([
+      configService.get(CONFIG_KEY_TIMEOUT_DAYS),
+      configService.get(CONFIG_KEY_MAX_PROGRESS),
+      configService.get(CONFIG_KEY_GLOBAL_THRESHOLD),
+    ]);
+    const timeoutDays = parseTimeoutDays(timeoutRaw);
+    const maxProgress = parseMaxProgress(maxProgressRaw);
+    const globalThreshold = parseGlobalThreshold(globalThresholdRaw);
     const cutoff = new Date(Date.now() - timeoutDays * 24 * 60 * 60 * 1000);
 
-    logger.info(`Scanning for downloads stalled before ${cutoff.toISOString()} (timeout=${timeoutDays}d)`);
+    logger.info(
+      `Scanning for stalled downloads (timeout=${timeoutDays}d, maxProgress=${maxProgress}%, globalThreshold=${globalThreshold})`,
+      { cutoffIso: cutoff.toISOString() }
+    );
 
     // Only requests currently in `downloading` status whose latest selected
     // DownloadHistory started before the cutoff. We intentionally do NOT touch
     // `processing` / `downloaded` / `available` — those have moved past the
     // download phase even if other steps later failed.
+    //
+    // Progress gate is applied here in the query, not after — anything at/above
+    // `maxProgress` is given more grace (probably just needs peers) and won't
+    // be swapped this run. Admins can dial maxProgress=100 to swap aggressively.
     const stalled = await prisma.request.findMany({
       where: {
         status: 'downloading',
         deletedAt: null,
-        progress: { lt: 100 },
+        progress: { lt: maxProgress },
         downloadHistory: {
           some: {
             selected: true,
@@ -91,9 +129,12 @@ export async function processDetectStalledDownloads(
         success: true,
         message: 'No stalled downloads',
         timeoutDays,
+        maxProgress,
+        globalThreshold,
         swapped: 0,
         failed: 0,
         skipped: 0,
+        promotedToGlobal: 0,
       };
     }
 
@@ -105,6 +146,7 @@ export async function processDetectStalledDownloads(
     let swapped = 0;
     let failed = 0;
     let skipped = 0;
+    let promotedToGlobal = 0;
 
     for (const request of stalled) {
       try {
@@ -146,7 +188,13 @@ export async function processDetectStalledDownloads(
 
         // 2. Block the release so the same torrent isn't re-grabbed.
         //    addAutoBlock never throws — it's safe to call unconditionally.
+        //    After writing the per-request block, count how many independent
+        //    stalls this release has accumulated. If we've crossed the
+        //    `globalThreshold`, promote ALL matching rows to global=true so
+        //    filter-blocked-results strips the release from every future search.
         if (dh.torrentName) {
+          const releaseKey = normalizeReleaseKey(dh.torrentName);
+
           await addAutoBlock({
             requestId: request.id,
             releaseName: dh.torrentName,
@@ -159,6 +207,35 @@ export async function processDetectStalledDownloads(
             downloadHistoryId: dh.id,
             jobId,
           });
+
+          const stallCount = await prisma.blockedRelease.count({
+            where: {
+              releaseKey,
+              source: 'download_fail',
+              reason: { startsWith: STALL_REASON_PREFIX },
+            },
+          });
+
+          if (stallCount >= globalThreshold) {
+            const promoted = await prisma.blockedRelease.updateMany({
+              where: {
+                releaseKey,
+                source: 'download_fail',
+                reason: { startsWith: STALL_REASON_PREFIX },
+                global: false,
+              },
+              data: { global: true },
+            });
+            if (promoted.count > 0) {
+              promotedToGlobal += promoted.count;
+              logger.info(`Promoted release to GLOBAL block`, {
+                releaseKey,
+                stallCount,
+                globalThreshold,
+                rowsPromoted: promoted.count,
+              });
+            }
+          }
         }
 
         // 3. Mark the DH row as failed for history visibility.
@@ -222,17 +299,23 @@ export async function processDetectStalledDownloads(
       swapped,
       failed,
       skipped,
+      promotedToGlobal,
       timeoutDays,
+      maxProgress,
+      globalThreshold,
     });
 
     return {
       success: true,
       message: 'Detect stalled downloads completed',
       timeoutDays,
+      maxProgress,
+      globalThreshold,
       totalChecked: stalled.length,
       swapped,
       failed,
       skipped,
+      promotedToGlobal,
     };
   } catch (error) {
     logger.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
