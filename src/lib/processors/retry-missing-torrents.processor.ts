@@ -30,15 +30,33 @@ export async function processRetryMissingTorrents(payload: RetryMissingTorrentsP
     const configService = getConfigService();
     const skipUnreleasedSetting = (await configService.get('indexer.skip_unreleased')) !== 'false';
 
-    // Find all active requests in awaiting_search OR awaiting_release status
+    // Find the 50 oldest-cooled-down requests in awaiting_search/awaiting_release.
+    //
+    // ORDER + COOLDOWN are LOAD-BEARING. Without them, Prisma falls back to PK
+    // ordering and the daily job picks the same 50 IDs every run forever —
+    // observed in production: 6,783 stuck requests, only 50 visited per day,
+    // the other 6,733 never get a re-search. The fix:
+    //   - `lastSearchAt asc, nulls first` rotates the queue (never-searched
+    //     requests get priority, then oldest-searched).
+    //   - `lastSearchAt < (now - 24h)` ensures we don't re-search anything
+    //     we've already touched in the last day (which would be wasted work).
+    const cooldownAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const requests = await prisma.request.findMany({
       where: {
         status: { in: ['awaiting_search', 'awaiting_release'] },
         deletedAt: null,
+        OR: [
+          { lastSearchAt: null },
+          { lastSearchAt: { lt: cooldownAgo } },
+        ],
       },
       include: {
         audiobook: true,
       },
+      orderBy: [
+        { lastSearchAt: { sort: 'asc', nulls: 'first' } },
+        { createdAt: 'asc' },
+      ],
       take: 50,
     });
 
