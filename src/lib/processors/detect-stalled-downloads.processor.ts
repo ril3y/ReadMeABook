@@ -123,22 +123,7 @@ export async function processDetectStalledDownloads(
       take: DEFAULT_MAX_PER_RUN,
     });
 
-    if (stalled.length === 0) {
-      logger.info('No stalled downloads found');
-      return {
-        success: true,
-        message: 'No stalled downloads',
-        timeoutDays,
-        maxProgress,
-        globalThreshold,
-        swapped: 0,
-        failed: 0,
-        skipped: 0,
-        promotedToGlobal: 0,
-      };
-    }
-
-    logger.info(`Found ${stalled.length} stalled requests (capped at ${DEFAULT_MAX_PER_RUN}/run)`);
+    logger.info(`Stage 1: ${stalled.length} stalled requests found (capped at ${DEFAULT_MAX_PER_RUN}/run)`);
 
     const jobQueue = getJobQueueService();
     const clientManager = getDownloadClientManager(configService);
@@ -294,12 +279,132 @@ export async function processDetectStalledDownloads(
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    logger.info(`Stall-swap pass complete`, {
+    logger.info(`Stage 1 (request-side) complete`, {
       totalChecked: stalled.length,
       swapped,
       failed,
       skipped,
       promotedToGlobal,
+      timeoutDays,
+      maxProgress,
+      globalThreshold,
+    });
+
+    // -----------------------------------------------------------------------
+    // STAGE 2 — qBT-direct orphan + stale scan.
+    //
+    // Stage 1 only sees requests whose status is still `downloading`. In
+    // practice (post-migration / after monitor-download connection-failure
+    // exhaustion), torrents keep loitering in qBT while their backing Request
+    // has already flipped to `awaiting_search` or never existed (Readarr-era
+    // orphans). Those are invisible to Stage 1 even though they're the bulk
+    // of "stuck" torrents. Stage 2 closes that gap:
+    //   - Walks the full torrent client torrent list
+    //   - Finds torrents added before the cutoff that are not actively
+    //     downloading (no progress AND no speed, or in failed state)
+    //   - Cross-references against DownloadHistory by torrent hash
+    //   - Three buckets:
+    //       (a) Orphan: no DH row at all -> delete with files
+    //       (b) Stale-linked: DH row exists but Request is gone (soft-deleted)
+    //           or in a non-downloading status -> delete with files
+    //       (c) Owned by a request still in `downloading` -> Stage 1 already
+    //           handled it; skip to avoid double-action
+    //
+    // The same DEFAULT_MAX_PER_RUN cap applies so a 2000-orphan deploy
+    // doesn't hammer qBT in one pass.
+    // -----------------------------------------------------------------------
+
+    let orphansDeleted = 0;
+    let staleLinkedDeleted = 0;
+    let qbtScanErrors = 0;
+
+    try {
+      const torrentClient = await clientManager.getClientServiceForProtocol('torrent');
+      if (!torrentClient) {
+        logger.info('No torrent client configured — skipping Stage 2');
+      } else {
+        const allTorrents = await torrentClient.listDownloads();
+        const candidates = allTorrents.filter(t => {
+          if (!t.addedAt || t.addedAt >= cutoff) return false;
+          if (t.progress >= 1) return false; // already complete
+          // Stalled: in failed state (missingFiles/error), OR no traffic on a
+          // download that isn't complete. Skip actively-seeding torrents
+          // (status: 'seeding') even if added long ago.
+          if (t.status === 'failed') return true;
+          if (t.status === 'downloading' && t.downloadSpeed === 0) return true;
+          return false;
+        });
+
+        logger.info(`Stage 2: ${allTorrents.length} torrents in client, ${candidates.length} stalled past cutoff`);
+
+        if (candidates.length > 0) {
+          const hashes = candidates.map(t => t.id.toLowerCase());
+          // One bulk lookup instead of N queries — much faster on large sets.
+          const dhRows = await prisma.downloadHistory.findMany({
+            where: { torrentHash: { in: hashes } },
+            select: {
+              torrentHash: true,
+              request: { select: { id: true, status: true, deletedAt: true } },
+            },
+          });
+          const dhByHash = new Map<string, typeof dhRows[number]>();
+          for (const dh of dhRows) {
+            if (dh.torrentHash) dhByHash.set(dh.torrentHash.toLowerCase(), dh);
+          }
+
+          const cap = Math.min(candidates.length, DEFAULT_MAX_PER_RUN);
+          for (let i = 0; i < cap; i++) {
+            const t = candidates[i];
+            try {
+              const dh = dhByHash.get(t.id.toLowerCase());
+              const requestStatus = dh?.request?.status;
+              const requestDeleted = dh?.request?.deletedAt != null;
+
+              // (c) Owned by an active downloading request — Stage 1 territory.
+              if (dh && !requestDeleted && requestStatus === 'downloading') {
+                continue;
+              }
+
+              // (a) or (b): delete from qBT WITH files.
+              await torrentClient.deleteDownload(t.id, true);
+              if (!dh) {
+                orphansDeleted++;
+                logger.info(`Stage 2: deleted orphan torrent (no DH)`, {
+                  hash: t.id,
+                  name: t.name,
+                  category: t.category,
+                  addedAt: t.addedAt?.toISOString(),
+                });
+              } else {
+                staleLinkedDeleted++;
+                logger.info(`Stage 2: deleted stale-linked torrent`, {
+                  hash: t.id,
+                  name: t.name,
+                  requestStatus: requestStatus ?? 'request-deleted',
+                  addedAt: t.addedAt?.toISOString(),
+                });
+              }
+            } catch (err) {
+              qbtScanErrors++;
+              logger.warn(`Stage 2: failed to delete torrent`, {
+                hash: t.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+      }
+    } catch (err) {
+      qbtScanErrors++;
+      logger.error(`Stage 2 scan failed`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    logger.info(`Pass complete`, {
+      stage1: { swapped, failed, skipped, promotedToGlobal },
+      stage2: { orphansDeleted, staleLinkedDeleted, qbtScanErrors },
       timeoutDays,
       maxProgress,
       globalThreshold,
@@ -316,6 +421,9 @@ export async function processDetectStalledDownloads(
       failed,
       skipped,
       promotedToGlobal,
+      orphansDeleted,
+      staleLinkedDeleted,
+      qbtScanErrors,
     };
   } catch (error) {
     logger.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
