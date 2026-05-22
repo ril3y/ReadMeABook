@@ -1,6 +1,10 @@
 /**
  * Component: Library Series Route Tests
  * Documentation: documentation/frontend/components.md
+ *
+ * Exercises /api/library/series end-to-end: aggregation, ASIN enrichment
+ * from the audiobooks lookup, and the new totalBooks denominator sourced
+ * from the series_catalog cache.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,9 +18,16 @@ const configMock = vi.hoisted(() => ({
   getPlexConfig: vi.fn(),
 }));
 
+const seriesCatalogMock = vi.hoisted(() => ({
+  getSeriesCatalogByAsins: vi.fn(),
+  pickStaleAsins: vi.fn(),
+  refreshSeriesCatalogInBackground: vi.fn(),
+}));
+
 vi.mock('@/lib/db', () => ({ prisma: prismaMock }));
 vi.mock('@/lib/middleware/auth', () => ({ requireAuth: requireAuthMock }));
 vi.mock('@/lib/services/config.service', () => ({ getConfigService: () => configMock }));
+vi.mock('@/lib/services/series-catalog.service', () => seriesCatalogMock);
 
 function buildRequest(query: Record<string, string> = {}) {
   const qs = new URLSearchParams(query).toString();
@@ -30,6 +41,9 @@ describe('Library series route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthMock.mockImplementation((req: any, handler: any) => handler(req));
+    // Default catalog: empty cache, no stale refreshes.
+    seriesCatalogMock.getSeriesCatalogByAsins.mockResolvedValue(new Map());
+    seriesCatalogMock.pickStaleAsins.mockReturnValue([]);
   });
 
   it('returns 400 when no library is configured', async () => {
@@ -44,10 +58,10 @@ describe('Library series route', () => {
     expect(payload.error).toBe('NoLibraryConfigured');
   });
 
-  it('returns empty series list when library has no ASIN-bearing books', async () => {
+  it('returns empty series list when no series exist in the library', async () => {
     configMock.getBackendMode.mockResolvedValue('audiobookshelf');
     configMock.get.mockResolvedValue('lib-1');
-    prismaMock.plexLibrary.findMany.mockResolvedValue([]);
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([]);
 
     const { GET } = await import('@/app/api/library/series/route');
     const response = await GET(buildRequest());
@@ -56,20 +70,21 @@ describe('Library series route', () => {
     expect(response.status).toBe(200);
     expect(payload.totalCount).toBe(0);
     expect(payload.series).toEqual([]);
+    // No ASINs means no catalog lookup should happen
+    expect(seriesCatalogMock.getSeriesCatalogByAsins).not.toHaveBeenCalled();
   });
 
-  it('aggregates owned books into series with bookCount', async () => {
+  it('aggregates by series and enriches with ASIN from audiobooks', async () => {
     configMock.getBackendMode.mockResolvedValue('audiobookshelf');
     configMock.get.mockResolvedValue('lib-1');
 
-    prismaMock.plexLibrary.findMany.mockResolvedValue([
-      { asin: 'ASIN1' }, { asin: 'ASIN2' }, { asin: 'ASIN3' }, { asin: 'ASIN4' },
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([
+      { series: 'Joe Ledger', _count: { _all: 3 } },
+      { series: 'Mistborn',  _count: { _all: 1 } },
     ]);
     prismaMock.audiobook.findMany.mockResolvedValue([
-      { audibleAsin: 'ASIN1', series: 'Joe Ledger', seriesAsin: 'SER1', coverArtUrl: 'a.jpg' },
-      { audibleAsin: 'ASIN2', series: 'Joe Ledger', seriesAsin: 'SER1', coverArtUrl: 'b.jpg' },
-      { audibleAsin: 'ASIN3', series: 'Joe Ledger', seriesAsin: 'SER1', coverArtUrl: 'c.jpg' },
-      { audibleAsin: 'ASIN4', series: 'Mistborn', seriesAsin: 'SER2', coverArtUrl: 'd.jpg' },
+      { series: 'Joe Ledger', seriesAsin: 'SER1ABCDE0', coverArtUrl: 'a.jpg' },
+      { series: 'Mistborn',   seriesAsin: 'SER2ABCDE0', coverArtUrl: 'd.jpg' },
     ]);
 
     const { GET } = await import('@/app/api/library/series/route');
@@ -79,38 +94,88 @@ describe('Library series route', () => {
     expect(response.status).toBe(200);
     expect(payload.totalCount).toBe(2);
     expect(payload.series).toEqual([
-      { title: 'Joe Ledger', bookCount: 3, asin: 'SER1', coverArtUrl: 'a.jpg' },
-      { title: 'Mistborn',  bookCount: 1, asin: 'SER2', coverArtUrl: 'd.jpg' },
+      { title: 'Joe Ledger', bookCount: 3, asin: 'SER1ABCDE0', coverArtUrl: 'a.jpg' },
+      { title: 'Mistborn',   bookCount: 1, asin: 'SER2ABCDE0', coverArtUrl: 'd.jpg' },
     ]);
   });
 
-  it('ignores books without series data', async () => {
+  it('attaches totalBooks from the series_catalog cache when present', async () => {
     configMock.getBackendMode.mockResolvedValue('audiobookshelf');
     configMock.get.mockResolvedValue('lib-1');
 
-    prismaMock.plexLibrary.findMany.mockResolvedValue([
-      { asin: 'ASIN1' }, { asin: 'ASIN2' },
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([
+      { series: 'Joe Ledger', _count: { _all: 3 } },
+      { series: 'Mistborn',  _count: { _all: 1 } },
     ]);
-    // findMany already filters by series:{not:null}, but verify empty result handles gracefully
-    prismaMock.audiobook.findMany.mockResolvedValue([]);
+    prismaMock.audiobook.findMany.mockResolvedValue([
+      { series: 'Joe Ledger', seriesAsin: 'SER1ABCDE0', coverArtUrl: 'a.jpg' },
+      { series: 'Mistborn',   seriesAsin: 'SER2ABCDE0', coverArtUrl: 'd.jpg' },
+    ]);
+
+    seriesCatalogMock.getSeriesCatalogByAsins.mockResolvedValue(new Map([
+      ['ser1abcde0', { seriesAsin: 'SER1ABCDE0', title: 'Joe Ledger', totalBooks: 12, coverArtUrl: null, audibleUrl: null, lastSyncedAt: new Date() }],
+      // Mistborn intentionally absent — falls back to no denominator
+    ]));
 
     const { GET } = await import('@/app/api/library/series/route');
     const response = await GET(buildRequest());
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.totalCount).toBe(0);
+    const joe = payload.series.find((s: any) => s.title === 'Joe Ledger');
+    const mist = payload.series.find((s: any) => s.title === 'Mistborn');
+    expect(joe.totalBooks).toBe(12);
+    expect(mist.totalBooks).toBeUndefined();
+  });
+
+  it('triggers background refresh for stale or missing catalog entries only', async () => {
+    configMock.getBackendMode.mockResolvedValue('audiobookshelf');
+    configMock.get.mockResolvedValue('lib-1');
+
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([
+      { series: 'Joe Ledger', _count: { _all: 3 } },
+    ]);
+    prismaMock.audiobook.findMany.mockResolvedValue([
+      { series: 'Joe Ledger', seriesAsin: 'SER1ABCDE0', coverArtUrl: 'a.jpg' },
+    ]);
+
+    seriesCatalogMock.pickStaleAsins.mockReturnValue(['SER1ABCDE0']);
+
+    const { GET } = await import('@/app/api/library/series/route');
+    const response = await GET(buildRequest());
+
+    expect(response.status).toBe(200);
+    expect(seriesCatalogMock.refreshSeriesCatalogInBackground).toHaveBeenCalledWith(['SER1ABCDE0']);
+  });
+
+  it('does not call refresh when nothing is stale', async () => {
+    configMock.getBackendMode.mockResolvedValue('audiobookshelf');
+    configMock.get.mockResolvedValue('lib-1');
+
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([
+      { series: 'Joe Ledger', _count: { _all: 3 } },
+    ]);
+    prismaMock.audiobook.findMany.mockResolvedValue([
+      { series: 'Joe Ledger', seriesAsin: 'SER1ABCDE0', coverArtUrl: 'a.jpg' },
+    ]);
+
+    seriesCatalogMock.pickStaleAsins.mockReturnValue([]);
+
+    const { GET } = await import('@/app/api/library/series/route');
+    await GET(buildRequest());
+
+    expect(seriesCatalogMock.refreshSeriesCatalogInBackground).not.toHaveBeenCalled();
   });
 
   it('search filter is case-insensitive substring match', async () => {
     configMock.getBackendMode.mockResolvedValue('audiobookshelf');
     configMock.get.mockResolvedValue('lib-1');
 
-    prismaMock.plexLibrary.findMany.mockResolvedValue([{ asin: 'A' }, { asin: 'B' }]);
-    prismaMock.audiobook.findMany.mockResolvedValue([
-      { audibleAsin: 'A', series: 'Joe Ledger', seriesAsin: null, coverArtUrl: null },
-      { audibleAsin: 'B', series: 'Mistborn',  seriesAsin: null, coverArtUrl: null },
+    prismaMock.plexLibrary.groupBy.mockResolvedValue([
+      { series: 'Joe Ledger', _count: { _all: 3 } },
+      { series: 'Mistborn',  _count: { _all: 1 } },
     ]);
+    prismaMock.audiobook.findMany.mockResolvedValue([]);
 
     const { GET } = await import('@/app/api/library/series/route');
     const response = await GET(buildRequest({ search: 'joe' }));
