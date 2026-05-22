@@ -215,6 +215,84 @@ export function IndexersTab({
             </div>
           </div>
         </div>
+
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mt-3">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label
+                htmlFor="stall-swap-max-progress"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Only swap when progress is below
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-3">
+                Stalled torrents at or above this percent are <strong>not</strong> swapped &mdash; gives near-complete downloads more grace before killing them. Lower = more conservative. Set to 100 to swap any stalled download regardless of progress.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  id="stall-swap-max-progress"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={settings.automation.stallSwapMaxProgress}
+                  onChange={(e) => {
+                    const raw = Number.parseInt(e.target.value, 10);
+                    const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 100) : 50;
+                    onChange({
+                      ...settings,
+                      automation: {
+                        ...settings.automation,
+                        stallSwapMaxProgress: next,
+                      },
+                    });
+                  }}
+                  className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-600 dark:text-gray-400">% progress</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mt-3">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label
+                htmlFor="global-block-threshold"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Globally block release after
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-3">
+                Independent stall failures of the <em>same release</em> before it gets promoted to a cross-request global block &mdash; meaning no request will be allowed to grab it again. Lower = more aggressive system-wide blocking.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  id="global-block-threshold"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={settings.automation.globalBlockThreshold}
+                  onChange={(e) => {
+                    const raw = Number.parseInt(e.target.value, 10);
+                    const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 100) : 3;
+                    onChange({
+                      ...settings,
+                      automation: {
+                        ...settings.automation,
+                        globalBlockThreshold: next,
+                      },
+                    });
+                  }}
+                  className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-600 dark:text-gray-400">stalls</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="border-t border-gray-200 dark:border-gray-700 pt-6">

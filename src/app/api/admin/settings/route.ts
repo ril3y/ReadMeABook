@@ -88,14 +88,25 @@ export async function GET(request: NextRequest) {
         skipUnreleased: configMap.get('indexer.skip_unreleased') !== 'false',
       },
       automation: {
-        // Default 7 days; clamped 1..365. Must stay in lock-step with
-        // /api/admin/settings/automation read contract and the
-        // detect-stalled-downloads processor which reads the config key directly.
+        // Must stay in lock-step with /api/admin/settings/automation contracts
+        // and the detect-stalled-downloads processor that reads these keys.
         stallTimeoutDays: (() => {
           const raw = configMap.get('automation.stall_timeout_days');
           const n = raw ? Number.parseInt(raw, 10) : NaN;
           if (!Number.isFinite(n) || n <= 0) return 7;
           return Math.min(Math.max(n, 1), 365);
+        })(),
+        stallSwapMaxProgress: (() => {
+          const raw = configMap.get('automation.stall_swap_max_progress');
+          const n = raw ? Number.parseInt(raw, 10) : NaN;
+          if (!Number.isFinite(n) || n < 0) return 50;
+          return Math.min(Math.max(n, 0), 100);
+        })(),
+        globalBlockThreshold: (() => {
+          const raw = configMap.get('automation.global_block_threshold');
+          const n = raw ? Number.parseInt(raw, 10) : NaN;
+          if (!Number.isFinite(n) || n < 1) return 3;
+          return Math.min(Math.max(n, 1), 100);
         })(),
       },
       // downloadClient is populated from multi-client format for backward compatibility
