@@ -311,4 +311,234 @@ describe('processDetectStalledDownloads', () => {
     expect(result.promotedToGlobal).toBe(0);
     expect(prismaMock.blockedRelease.updateMany).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Stage 2 — qBT-direct orphan + stale scan
+  //
+  // These tests bypass Stage 1 (no `downloading` requests in the DB) so the
+  // processor falls through to Stage 2 and operates on the torrents returned
+  // by `listDownloads()`.
+  // ---------------------------------------------------------------------------
+
+  function makeStaleTorrent(overrides: Record<string, any> = {}) {
+    return {
+      id: 'hashlowercase1',
+      name: 'A.Test.Release-GROUP',
+      size: 1024,
+      bytesDownloaded: 256,
+      progress: 0.25,
+      status: 'downloading',
+      downloadSpeed: 0, // not progressing
+      eta: 0,
+      category: 'readmeabook',
+      addedAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000), // 14d ago
+      ...overrides,
+    };
+  }
+
+  function makeStaleClientMock(torrents: any[], deleteFn?: any) {
+    return {
+      listDownloads: vi.fn().mockResolvedValue(torrents),
+      deleteDownload: deleteFn ?? vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('Stage 2: deletes orphan torrents (no matching DH row)', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]); // skip Stage 1
+    prismaMock.downloadHistory.findMany.mockResolvedValue([]); // no DH match → orphan
+    const deleteFn = vi.fn().mockResolvedValue(undefined);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      makeStaleClientMock([makeStaleTorrent()], deleteFn)
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'stage2-1' });
+
+    expect(result.orphansDeleted).toBe(1);
+    expect(result.staleLinkedDeleted).toBe(0);
+    // Orphans get the deleteWithFiles=true call
+    expect(deleteFn).toHaveBeenCalledWith('hashlowercase1', true);
+    // No block/search since there's no Request behind the orphan
+    expect(blocklistMock.addAutoBlock).not.toHaveBeenCalled();
+    expect(jobQueueMock.addSearchJob).not.toHaveBeenCalled();
+  });
+
+  it('Stage 2: stale-linked with Request.status=available deletes torrent but does NOT re-search', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]); // skip Stage 1
+    prismaMock.downloadHistory.findMany.mockResolvedValue([
+      {
+        id: 'dh-stale-1',
+        torrentHash: 'hashlowercase1',
+        torrentName: 'A.Test.Release-GROUP',
+        nzbId: null,
+        indexerName: 'IndexerA',
+        indexerId: 7,
+        request: {
+          id: 'req-stale-1',
+          status: 'available', // already in library
+          type: 'audiobook',
+          deletedAt: null,
+          audiobook: { id: 'ab-1', title: 'X', author: 'Y', audibleAsin: 'Z' },
+        },
+      },
+    ]);
+    const deleteFn = vi.fn().mockResolvedValue(undefined);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      makeStaleClientMock([makeStaleTorrent()], deleteFn)
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'stage2-2' });
+
+    expect(result.staleLinkedDeleted).toBe(1);
+    expect(deleteFn).toHaveBeenCalledWith('hashlowercase1', true);
+    // No block / no search — the book is already owned
+    expect(blocklistMock.addAutoBlock).not.toHaveBeenCalled();
+    expect(jobQueueMock.addSearchJob).not.toHaveBeenCalled();
+  });
+
+  it('Stage 2: stale-linked with Request.status=awaiting_search blocks release + queues fresh search + deletes torrent', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]); // skip Stage 1
+    prismaMock.downloadHistory.findMany.mockResolvedValue([
+      {
+        id: 'dh-stale-2',
+        torrentHash: 'hashlowercase1',
+        torrentName: 'Another.Release-FOO',
+        nzbId: null,
+        indexerName: 'IndexerA',
+        indexerId: 7,
+        request: {
+          id: 'req-stale-2',
+          status: 'awaiting_search',
+          type: 'audiobook',
+          deletedAt: null,
+          audiobook: { id: 'ab-2', title: 'Title2', author: 'Author2', audibleAsin: 'ASIN2' },
+        },
+      },
+    ]);
+    const deleteFn = vi.fn().mockResolvedValue(undefined);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      makeStaleClientMock([makeStaleTorrent()], deleteFn)
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'stage2-3' });
+
+    expect(result.staleLinkedDeleted).toBe(1);
+    expect(deleteFn).toHaveBeenCalledWith('hashlowercase1', true);
+    // Block was written for this request
+    expect(blocklistMock.addAutoBlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'req-stale-2',
+        releaseName: 'Another.Release-FOO',
+        source: 'download_fail',
+      })
+    );
+    // Fresh search queued (audiobook path, not ebook)
+    expect(jobQueueMock.addSearchJob).toHaveBeenCalledWith(
+      'req-stale-2',
+      expect.objectContaining({ id: 'ab-2' })
+    );
+    expect(jobQueueMock.addSearchEbookJob).not.toHaveBeenCalled();
+  });
+
+  it('Stage 2: SKIPS torrents whose Request is in downloading (Stage 1 territory)', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]); // Stage 1's own query is empty
+    prismaMock.downloadHistory.findMany.mockResolvedValue([
+      {
+        id: 'dh-active-1',
+        torrentHash: 'hashlowercase1',
+        torrentName: 'Active.Release',
+        nzbId: null,
+        indexerName: null,
+        indexerId: null,
+        request: {
+          id: 'req-active',
+          status: 'downloading', // Stage 1's responsibility
+          type: 'audiobook',
+          deletedAt: null,
+          audiobook: { id: 'ab-3', title: 'T', author: 'A', audibleAsin: null },
+        },
+      },
+    ]);
+    const deleteFn = vi.fn().mockResolvedValue(undefined);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      makeStaleClientMock([makeStaleTorrent()], deleteFn)
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'stage2-4' });
+
+    // No deletion: ownership belongs to Stage 1 in this pass
+    expect(result.orphansDeleted).toBe(0);
+    expect(result.staleLinkedDeleted).toBe(0);
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it('Stage 2: lowercases the qBT hash when looking up DH rows (case-mismatch defense)', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]);
+    prismaMock.downloadHistory.findMany.mockResolvedValue([]);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      // qBT sometimes returns uppercase hex; the processor must lowercase it
+      // before querying the DB or it'll miss DH rows persisted in lowercase.
+      makeStaleClientMock([makeStaleTorrent({ id: 'AABBCCDD11223344' })])
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    await processDetectStalledDownloads({ jobId: 'stage2-5' });
+
+    expect(prismaMock.downloadHistory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { torrentHash: { in: ['aabbccdd11223344'] } },
+      })
+    );
+  });
+
+  it('Stage 2: still deletes the torrent if block-and-research throws (delete-in-finally semantics)', async () => {
+    prismaMock.request.findMany.mockResolvedValue([]);
+    prismaMock.downloadHistory.findMany.mockResolvedValue([
+      {
+        id: 'dh-stale-3',
+        torrentHash: 'hashlowercase1',
+        torrentName: 'Throw.Release',
+        nzbId: null,
+        indexerName: 'IndexerA',
+        indexerId: 7,
+        request: {
+          id: 'req-stale-3',
+          status: 'awaiting_search',
+          type: 'audiobook',
+          deletedAt: null,
+          audiobook: { id: 'ab-4', title: 'T', author: 'A', audibleAsin: null },
+        },
+      },
+    ]);
+    // Make addAutoBlock blow up — must not strand the torrent.
+    blocklistMock.addAutoBlock.mockRejectedValueOnce(new Error('redis down'));
+    const deleteFn = vi.fn().mockResolvedValue(undefined);
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(
+      makeStaleClientMock([makeStaleTorrent()], deleteFn)
+    );
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'stage2-6' });
+
+    // Delete fired despite the upstream block-and-research failure
+    expect(deleteFn).toHaveBeenCalledWith('hashlowercase1', true);
+    expect(result.staleLinkedDeleted).toBe(1);
+    // Error was counted into the scan-errors bucket so we can surface it
+    expect(result.qbtScanErrors).toBeGreaterThanOrEqual(1);
+  });
 });
