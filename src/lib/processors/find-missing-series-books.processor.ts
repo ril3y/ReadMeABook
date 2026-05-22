@@ -183,13 +183,46 @@ export async function processFindMissingSeriesBooks(
         seriesProcessed++;
         const catalogAsins = catalogBooks.map(b => b.asin).filter((a): a is string => !!a);
 
+        // Library has the same book under a DIFFERENT edition's ASIN often.
+        // Audible's catalog ASIN for a book frequently differs from what's
+        // in the user's local library (because Audible cycles ASINs per
+        // release edition / region / abridged variant). Without a title+author
+        // fallback, the processor would create duplicate requests for books
+        // the user already owns under a different ASIN. Build a normalized
+        // (title|author) key set from plex_library so the missing-detection
+        // can also skip those cross-edition matches.
+        const ownedAuthorTitles = await prisma.plexLibrary.findMany({
+          where: { author: { not: '' } },
+          select: { title: true, author: true },
+        });
+        const normalize = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const ownedTitleAuthorSet = new Set<string>();
+        for (const r of ownedAuthorTitles) {
+          if (r.title && r.author) {
+            ownedTitleAuthorSet.add(`${normalize(r.title)}|${normalize(r.author)}`);
+          }
+        }
+
         // Which of these are already owned (in ABS library cache)?
         const ownedRows = await prisma.plexLibrary.findMany({
           where: { asin: { in: catalogAsins } },
           select: { asin: true },
         });
         const ownedSet = new Set(ownedRows.map(r => r.asin).filter((a): a is string => !!a));
-        const missingBooks = catalogBooks.filter(b => b.asin && !ownedSet.has(b.asin));
+        // Two-axis ownership check:
+        //   1. catalog ASIN exists in plex_library.asin (clean match)
+        //   2. catalog book's (title|author) matches an owned book under any
+        //      ASIN (cross-edition dedupe — Audible's catalog edition ASIN
+        //      differs from the library edition for the same audiobook)
+        const missingBooks = catalogBooks.filter(b => {
+          if (!b.asin) return false;
+          if (ownedSet.has(b.asin)) return false;
+          if (b.title && b.author) {
+            const key = `${normalize(b.title)}|${normalize(b.author)}`;
+            if (ownedTitleAuthorSet.has(key)) return false;
+          }
+          return true;
+        });
 
         logger.info(`Series "${ws.seriesTitle}": ${catalogBooks.length} catalog (${page - 1} pages scraped), ${ownedSet.size} owned, ${missingBooks.length} missing`);
         // (seriesTitleFromScrape is captured for future use — surfacing it
