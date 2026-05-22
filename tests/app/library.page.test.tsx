@@ -153,6 +153,34 @@ describe('LibraryPage', () => {
     expect(screen.getByText('3 books')).toBeInTheDocument();
   });
 
+  it('renders "X / Y total" and "missing" badge when totalBooks is known', async () => {
+    setMockSearchParams('tab=series');
+    useLibrarySeriesMock.mockReturnValue(defaultSeries({
+      series: [
+        // Partial: 3 of 12 owned, expect missing pip
+        { title: 'Joe Ledger', bookCount: 3,  asin: 'SER1ABCDE0', coverArtUrl: undefined, totalBooks: 12 },
+        // Complete: 7 of 7 owned, no missing pip
+        { title: 'Mistborn',   bookCount: 7,  asin: 'SER2ABCDE0', coverArtUrl: undefined, totalBooks: 7  },
+        // No total known: fall back to "X book(s)"
+        { title: 'Greystone',  bookCount: 2,  asin: null,         coverArtUrl: undefined },
+      ],
+      totalCount: 3,
+    }));
+
+    const { default: LibraryPage } = await import('@/app/library/page');
+    render(<LibraryPage />);
+
+    // Partial series shows X / Y total + missing pill
+    expect(screen.getByText('3 / 12 total')).toBeInTheDocument();
+    expect(screen.getByText(/9 missing/)).toBeInTheDocument();
+
+    // Complete series shows X / Y total, no missing pill for it
+    expect(screen.getByText('7 / 7 total')).toBeInTheDocument();
+
+    // Unknown total falls back to legacy book-count badge
+    expect(screen.getByText('2 books')).toBeInTheDocument();
+  });
+
   it('switching tabs updates the URL via router.replace', async () => {
     const { default: LibraryPage } = await import('@/app/library/page');
     render(<LibraryPage />);
