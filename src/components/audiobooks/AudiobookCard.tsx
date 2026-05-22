@@ -21,6 +21,13 @@ interface AudiobookCardProps {
   requestStatus?: string;
   onRequestSuccess?: () => void;
   squareCovers?: boolean;
+  /**
+   * When true (set by the series detail page), render a visible
+   * "Missing" badge on books that aren't in the library and have no
+   * pending request. The hover overlay already exposes the Request
+   * button — this flag just makes the gap obvious at a glance.
+   */
+  highlightMissing?: boolean;
 }
 
 // Status configuration for elegant display
@@ -52,6 +59,7 @@ export function AudiobookCard({
   audiobook,
   onRequestSuccess,
   squareCovers = false,
+  highlightMissing = false,
 }: AudiobookCardProps) {
   const { user } = useAuth();
   const { createRequest, isLoading } = useCreateRequest();
@@ -68,6 +76,10 @@ export function AudiobookCard({
     : audiobook;
   const status = getStatusConfig(displayAudiobook);
   const isIgnored = localIsIgnored !== undefined ? localIsIgnored : audiobook.isIgnored;
+  // "Missing" = the parent (series detail page) asked us to highlight gaps
+  // AND this book has no in-library / pending / processing status. Drives
+  // the bottom-right pill and a soft red ring on the cover.
+  const isMissing = highlightMissing && !status;
 
   const handleRequest = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -115,6 +127,7 @@ export function AudiobookCard({
               ${squareCovers ? 'aspect-square' : 'aspect-[2/3]'}
               ${status?.type === 'available' ? 'ring-2 ring-emerald-400/60 dark:ring-emerald-500/50' : ''}
               ${status?.type === 'processing' ? 'ring-2 ring-amber-400/60 dark:ring-amber-500/50' : ''}
+              ${isMissing ? 'ring-2 ring-red-400/50 dark:ring-red-500/40 opacity-90' : ''}
             `}
           >
             {/* Cover Art */}
@@ -218,6 +231,21 @@ export function AudiobookCard({
                   <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                 </svg>
                 <span>{audiobook.rating.toFixed(1)}</span>
+              </div>
+            )}
+
+            {/* Missing Indicator - Bottom Right (series detail only)
+                Sibling to the rating/status/ignored chips. Hidden on hover
+                so the Request CTA from the overlay isn't visually crowded. */}
+            {isMissing && (
+              <div
+                className="absolute bottom-3 right-3 flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/80 backdrop-blur-md text-white text-[10px] font-semibold uppercase tracking-wide transition-opacity duration-300 group-hover:opacity-0"
+                title="Not in your library — click to request"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.008v-.008H12v.008zM21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Missing</span>
               </div>
             )}
 
