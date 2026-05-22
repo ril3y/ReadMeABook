@@ -35,8 +35,13 @@ export interface FilterBlockedResultsOutput<T> {
  * - Hash: exact, only when both the result and a blocklist row have one.
  *
  * Returns the original array unchanged when there are no results — common
- * hot-path case, so short-circuit. We still query for globals even when the
- * request's own blocklist is empty, since the global registry is decoupled.
+ * hot-path case, so short-circuit.
+ *
+ * Performance note: the globals query is NARROWED to the candidate keys/hashes
+ * from the current results array — turns what was a full-table scan-and-ship
+ * of every global row into an indexed point lookup against the partial index
+ * `blocked_releases_global_release_key_idx`. Critical at scale (the global
+ * table grows over time but the result set on any one search is bounded).
  */
 export async function filterBlockedResults<T extends FilterableResult>(
   requestId: string,
@@ -46,10 +51,22 @@ export async function filterBlockedResults<T extends FilterableResult>(
     return { kept: results, blockedCount: 0 };
   }
 
+  // Build the candidate sets up-front so the globals query can narrow on them.
+  const candidateKeys = Array.from(new Set(results.map(r => normalizeReleaseKey(r.title))));
+  const candidateHashes = Array.from(
+    new Set(results.map(r => r.infoHash).filter((h): h is string => Boolean(h)))
+  );
+
+  // OR-clauses for the global lookup. At least one must be present (we already
+  // returned early when results.length===0), so this is safe.
+  const globalOr: Array<{ releaseKey: { in: string[] } } | { releaseHash: { in: string[] } }> = [];
+  if (candidateKeys.length > 0) globalOr.push({ releaseKey: { in: candidateKeys } });
+  if (candidateHashes.length > 0) globalOr.push({ releaseHash: { in: candidateHashes } });
+
   const [perRequest, globals] = await Promise.all([
     getBlocklistForRequest(requestId),
     prisma.blockedRelease.findMany({
-      where: { global: true },
+      where: { global: true, OR: globalOr },
       select: { releaseKey: true, releaseHash: true },
     }),
   ]);
