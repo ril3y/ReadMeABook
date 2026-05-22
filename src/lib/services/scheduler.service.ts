@@ -22,7 +22,7 @@ const STALE_NAME_REWRITES: ReadonlyArray<{
   { type: 'plex_recently_added_check', staleName: 'Plex Recently Added Check', neutralName: 'Recently Added Check' },
 ];
 
-export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads' | 'give_up_stuck_searches';
+export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads' | 'give_up_stuck_searches' | 'find_missing_series_books';
 
 export interface ScheduledJob {
   id: string;
@@ -179,6 +179,17 @@ export class SchedulerService {
         // last-chance hits accumulate first.
         schedule: '0 1 * * *',
         enabled: true, // Defaults to 10 attempts AND 60+ days, so won't auto-fail anything until the rotation builds up evidence.
+        payload: {},
+      },
+      {
+        name: 'Find Missing Series Books',
+        type: 'find_missing_series_books' as ScheduledJobType,
+        // Daily at 02:00 — after retry-missing + give-up. Walks watched_series
+        // (~25 per pass), scrapes each, auto-requests missing books up to a
+        // 100/run cap. Default OFF — must be explicitly enabled because it
+        // can flood the awaiting_search queue if many series are watched.
+        schedule: '0 2 * * *',
+        enabled: false,
         payload: {},
       },
     ];
@@ -460,6 +471,9 @@ export class SchedulerService {
         break;
       case 'give_up_stuck_searches':
         bullJobId = await this.triggerGiveUpStuckSearches(job);
+        break;
+      case 'find_missing_series_books':
+        bullJobId = await this.triggerFindMissingSeriesBooks(job);
         break;
       default:
         throw new Error(`Unknown job type: ${job.type}`);
@@ -762,6 +776,14 @@ export class SchedulerService {
    */
   private async triggerGiveUpStuckSearches(job: any): Promise<string> {
     return await this.jobQueue.addGiveUpStuckSearchesJob(job.id);
+  }
+
+  /**
+   * Trigger find-missing-series-books (creates Requests for missing books
+   * across watched series).
+   */
+  private async triggerFindMissingSeriesBooks(job: any): Promise<string> {
+    return await this.jobQueue.addFindMissingSeriesBooksJob({ scheduledJobId: job.id });
   }
 }
 

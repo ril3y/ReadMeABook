@@ -5,7 +5,7 @@
 
 'use client';
 
-import { use, useCallback, useMemo } from 'react';
+import { use, useCallback, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
@@ -17,6 +17,7 @@ import { Audiobook } from '@/lib/hooks/useAudiobooks';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { SectionToolbar } from '@/components/ui/SectionToolbar';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { fetchWithAuth } from '@/lib/utils/api';
 
 export default function SeriesDetailPage({
   params,
@@ -29,6 +30,41 @@ export default function SeriesDetailPage({
   const fromSeriesTitle = searchParams.get('from');
   const { series, hasMore, isLoading: seriesLoading, isLoadingMore, loadMore } = useSeriesDetail(asin);
   const { cardSize, setCardSize, squareCovers, setSquareCovers, hideAvailable, setHideAvailable } = usePreferences();
+
+  // Per-series "Fill missing books" state. Counts missing books visually,
+  // POSTs to the fill-gaps API, surfaces success/error inline.
+  const [fillingGaps, setFillingGaps] = useState(false);
+  const [fillMessage, setFillMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const missingCount = useMemo(
+    () =>
+      series
+        ? series.books.filter((b: Audiobook) => !b.isAvailable && b.requestStatus !== 'completed').length
+        : 0,
+    [series]
+  );
+
+  const handleFillGaps = useCallback(async () => {
+    setFillingGaps(true);
+    setFillMessage(null);
+    try {
+      const res = await fetchWithAuth(`/api/series/${asin}/fill-gaps`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setFillMessage({
+        kind: 'success',
+        text: 'Queued — missing books will appear as new requests within a minute.',
+      });
+    } catch (err) {
+      setFillMessage({
+        kind: 'error',
+        text: err instanceof Error ? err.message : 'Fill-gaps failed',
+      });
+    } finally {
+      setFillingGaps(false);
+    }
+  }, [asin]);
 
   const handleBack = useCallback(() => {
     // Use browser back if we came from within the app, otherwise fallback to /series
@@ -78,7 +114,36 @@ export default function SeriesDetailPage({
           {seriesLoading ? (
             <SeriesDetailSkeleton squareCovers={squareCovers} />
           ) : series ? (
-            <SeriesDetailCard series={series} squareCovers={squareCovers} hasMore={hasMore} />
+            <>
+              <SeriesDetailCard series={series} squareCovers={squareCovers} hasMore={hasMore} />
+              {/* Fill-gaps action: creates Requests for every missing book
+                  in this series so the user doesn't have to click each one. */}
+              {missingCount > 0 && (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4 flex flex-wrap items-center gap-3">
+                  <div className="flex-1 min-w-0 text-sm text-amber-900 dark:text-amber-200">
+                    <strong>{missingCount}</strong> book{missingCount === 1 ? '' : 's'} missing from this series in your library.
+                  </div>
+                  <button
+                    onClick={handleFillGaps}
+                    disabled={fillingGaps}
+                    className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 rounded-md"
+                  >
+                    {fillingGaps ? 'Queueing…' : 'Request all missing'}
+                  </button>
+                </div>
+              )}
+              {fillMessage && (
+                <div
+                  className={`rounded-lg p-3 text-sm ${
+                    fillMessage.kind === 'success'
+                      ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                      : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
+                  }`}
+                >
+                  {fillMessage.text}
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-center py-16 space-y-4">
               <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
