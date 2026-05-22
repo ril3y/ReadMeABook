@@ -299,6 +299,12 @@ model BlockedRelease {
   reasonDetail      String?  @map("reason_detail") @db.Text // raw client error (SAB failMessage, NZBGet Par/Unpack)
   downloadHistoryId String?  @map("download_history_id") // traceability to the DownloadHistory row that failed
   jobId             String?  @map("job_id") // origin job (also drives JobEvent emission via logger)
+  // When true, this block applies CROSS-REQUEST — filter-blocked-results will
+  // strip the matching release from any request's search results. Promoted by
+  // detect-stalled-downloads after a release stalls N independent times
+  // (controlled by `automation.global_block_threshold`). Per-request rows can
+  // be unblocked individually; global rows survive until manually cleared.
+  global            Boolean  @default(false)
   createdAt         DateTime @default(now()) @map("created_at")
 
   // Relations
