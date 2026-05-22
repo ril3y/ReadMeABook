@@ -22,7 +22,7 @@ const STALE_NAME_REWRITES: ReadonlyArray<{
   { type: 'plex_recently_added_check', staleName: 'Plex Recently Added Check', neutralName: 'Recently Added Check' },
 ];
 
-export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads' | 'give_up_stuck_searches' | 'find_missing_series_books';
+export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads' | 'give_up_stuck_searches' | 'find_missing_series_books' | 'backfill_series_catalog';
 
 export interface ScheduledJob {
   id: string;
@@ -190,6 +190,18 @@ export class SchedulerService {
         // can flood the awaiting_search queue if many series are watched.
         schedule: '0 2 * * *',
         enabled: false,
+        payload: {},
+      },
+      {
+        name: 'Backfill Series Catalog',
+        type: 'backfill_series_catalog' as ScheduledJobType,
+        // Daily at 03:00 — after the request-creating jobs. Pure
+        // metadata-caching pass: resolves series names to seriesAsin via
+        // Audnexus + scrapes totalBooks. Enabled by default because it
+        // doesn't create requests (no flood risk), and the Library Series
+        // tab needs the catalog data to render the "X / Y total" denominator.
+        schedule: '0 3 * * *',
+        enabled: true,
         payload: {},
       },
     ];
@@ -474,6 +486,9 @@ export class SchedulerService {
         break;
       case 'find_missing_series_books':
         bullJobId = await this.triggerFindMissingSeriesBooks(job);
+        break;
+      case 'backfill_series_catalog':
+        bullJobId = await this.triggerBackfillSeriesCatalog(job);
         break;
       default:
         throw new Error(`Unknown job type: ${job.type}`);
@@ -784,6 +799,14 @@ export class SchedulerService {
    */
   private async triggerFindMissingSeriesBooks(job: any): Promise<string> {
     return await this.jobQueue.addFindMissingSeriesBooksJob({ scheduledJobId: job.id });
+  }
+
+  /**
+   * Trigger backfill-series-catalog (resolves uncached series names to
+   * seriesAsin via Audnexus + populates series_catalog).
+   */
+  private async triggerBackfillSeriesCatalog(job: any): Promise<string> {
+    return await this.jobQueue.addBackfillSeriesCatalogJob(job.id);
   }
 }
 
