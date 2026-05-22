@@ -86,6 +86,16 @@ export async function GET(request: NextRequest) {
         // Must stay in lock-step with /api/admin/settings/indexer-options read contract
         // and any background worker that reads `indexer.skip_unreleased` directly.
         skipUnreleased: configMap.get('indexer.skip_unreleased') !== 'false',
+        // Default 25 (lowered from the prior hardcoded 50) — ABB-primary
+        // setups need it lower so single-result searches don't throw away
+        // the only available torrent. Must match the parse in
+        // /api/admin/settings/indexer-options and the per-processor reads.
+        minQualityScore: (() => {
+          const raw = configMap.get('indexer.min_quality_score');
+          const n = raw ? Number.parseInt(raw, 10) : NaN;
+          if (!Number.isFinite(n) || n < 0) return 25;
+          return Math.min(Math.max(n, 0), 100);
+        })(),
       },
       automation: {
         // Must stay in lock-step with /api/admin/settings/automation contracts
