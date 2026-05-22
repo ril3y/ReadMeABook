@@ -17,6 +17,7 @@ export interface Settings {
   registration: RegistrationSettings;
   prowlarr: ProwlarrSettings;
   indexerOptions: IndexerOptionsSettings;
+  automation: AutomationSettings;
   downloadClient: DownloadClientSettings;
   paths: PathsSettings;
   ebook: EbookSettings;
@@ -88,6 +89,31 @@ export interface IndexerOptionsSettings {
    * Backing config key: `indexer.skip_unreleased`.
    */
   skipUnreleased: boolean;
+}
+
+/**
+ * Automation behavioral options (background lifecycle processors).
+ * Persisted via `/api/admin/settings/automation`.
+ */
+export interface AutomationSettings {
+  /**
+   * Days a download can stay in `downloading` status before
+   * detect-stalled-downloads auto-swaps the release. Clamped 1..365.
+   * Backing config key: `automation.stall_timeout_days`.
+   */
+  stallTimeoutDays: number;
+  /**
+   * Stalled downloads at or above this progress percent are NOT swapped —
+   * gives near-complete torrents more grace. Clamped 0..100, default 50.
+   * Backing config key: `automation.stall_swap_max_progress`.
+   */
+  stallSwapMaxProgress: number;
+  /**
+   * Independent stall failures of the same release before it gets promoted to
+   * a cross-request global block. Clamped 1..100, default 3.
+   * Backing config key: `automation.global_block_threshold`.
+   */
+  globalBlockThreshold: number;
 }
 
 /**

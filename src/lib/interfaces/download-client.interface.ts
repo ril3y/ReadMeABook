@@ -92,6 +92,9 @@ export interface DownloadInfo {
   seedingTime?: number;
   /** Upload/download ratio (torrent clients only) */
   ratio?: number;
+  /** When the download was added to the client. Used by stall-detection
+   *  scanners to find torrents that have lingered past their timeout. */
+  addedAt?: Date;
 }
 
 /** Options for adding a new download */
@@ -201,4 +204,13 @@ export interface IDownloadClient {
    * @param category - Category/label name to assign
    */
   setCategory(id: string, category: string): Promise<void>;
+
+  /**
+   * List ALL downloads currently tracked by the client. Used by lifecycle
+   * scanners (detect-stalled-downloads) that need to see the full set —
+   * including orphans that RMAB no longer has a DownloadHistory row for.
+   * @param category - Optional category/label filter
+   * @returns Array of DownloadInfo, oldest-first ordering is not guaranteed
+   */
+  listDownloads(category?: string): Promise<DownloadInfo[]>;
 }

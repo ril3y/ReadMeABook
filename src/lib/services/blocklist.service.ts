@@ -35,6 +35,13 @@ export interface AddAutoBlockInput {
   downloadHistoryId?: string | null;
   /** When provided, a JobEvent log entry is emitted via RMABLogger.forJob. */
   jobId?: string | null;
+  /**
+   * When true, the row is marked as a cross-request global block — future
+   * searches for ANY request will strip this release. Used by
+   * detect-stalled-downloads once a release crosses the global-stall threshold.
+   * Per-request blocks (default) only affect their originating request.
+   */
+  global?: boolean;
 }
 
 export interface AddAutoBlockResult {
@@ -61,6 +68,10 @@ export async function addAutoBlock(
   const before = new Date();
 
   try {
+    // Idempotent semantics: first writer wins on per-call metadata, except
+    // `global` which only ever promotes from false→true (never demotes). This
+    // lets a per-request block be retroactively promoted to global on a later
+    // call without surprising the original caller.
     const blocked = await prisma.blockedRelease.upsert({
       where: { requestId_releaseKey: { requestId: input.requestId, releaseKey } },
       create: {
@@ -75,8 +86,9 @@ export async function addAutoBlock(
         reasonDetail: input.reasonDetail ?? null,
         downloadHistoryId: input.downloadHistoryId ?? null,
         jobId: input.jobId ?? null,
+        global: input.global ?? false,
       },
-      update: {},
+      update: input.global ? { global: true } : {},
     });
 
     const wasNew = blocked.createdAt >= before;

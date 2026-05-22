@@ -124,6 +124,21 @@ export const saveTabSettings = async (
       }).then(res => {
         if (!res.ok) throw new Error('Failed to save indexer options');
       });
+
+      // Save automation options (stall-timeout, progress gate, global threshold).
+      // Lives in the Indexers tab since these are auto-search-adjacent, but the
+      // backing config category is `automation`.
+      await fetchWithAuth('/api/admin/settings/automation', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stallTimeoutDays: settings.automation.stallTimeoutDays,
+          stallSwapMaxProgress: settings.automation.stallSwapMaxProgress,
+          globalBlockThreshold: settings.automation.globalBlockThreshold,
+        }),
+      }).then(res => {
+        if (!res.ok) throw new Error('Failed to save automation options');
+      });
       break;
 
     case 'download':

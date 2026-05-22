@@ -94,6 +94,14 @@ export async function processScanPlex(payload: ScanPlexPayload): Promise<any> {
               year: item.year || existing.year,
               asin: item.asin || existing.asin,  // Store ASIN from library backend
               isbn: item.isbn || existing.isbn,  // Store ISBN from library backend
+              // Coalesce to existing if scan returned no series — ABS minified
+              // list responses occasionally drop seriesName on items that have
+              // it on the full record, and a wrongly-blanked series is worse
+              // than a stale one. A book genuinely removed from a series in
+              // ABS will clear on the next match/refresh cycle that returns
+              // full media metadata.
+              series: item.series ?? existing.series,
+              seriesPart: item.seriesPart ?? existing.seriesPart,
               thumbUrl: item.coverUrl || existing.thumbUrl,
               plexLibraryId: targetLibraryId,
               plexRatingKey: item.id || existing.plexRatingKey,
@@ -136,6 +144,8 @@ export async function processScanPlex(payload: ScanPlexPayload): Promise<any> {
               year: item.year,
               asin: item.asin,  // Store ASIN from library backend (Plex or Audiobookshelf)
               isbn: item.isbn,  // Store ISBN from library backend
+              series: item.series ?? null,
+              seriesPart: item.seriesPart ?? null,
               thumbUrl: item.coverUrl,
               plexLibraryId: targetLibraryId,
               addedAt: item.addedAt,
