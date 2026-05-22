@@ -807,6 +807,34 @@ model AudibleCacheCategory {
 }
 
 // ============================================================================
+// SERIES CATALOG TABLE
+// Cached "true" series totals from Audible (scraped via audible-series.ts).
+// Used by /api/library/series to show "X owned / Y total" per series tile,
+// without forcing a fresh scrape on every page render. Refreshed lazily by
+// background calls from the library route + opportunistically on every
+// /api/series/{asin} hit (which already scrapes the page anyway).
+//
+// Keyed by series ASIN — series without an ASIN simply don't appear in
+// the cache and the UI falls back to "X owned" (no denominator).
+// Documentation: documentation/features/series-totals.md
+// ============================================================================
+
+model SeriesCatalog {
+  seriesAsin   String   @id @map("series_asin")
+  title        String
+  totalBooks   Int      @map("total_books")
+  coverArtUrl  String?  @map("cover_art_url") @db.Text
+  audibleUrl   String?  @map("audible_url") @db.Text
+  lastSyncedAt DateTime @default(now()) @map("last_synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([lastSyncedAt])
+  @@index([title])
+  @@map("series_catalog")
+}
+
+// ============================================================================
 // DATA MIGRATION TRACKING
 // Tracks which data migration SQL scripts have been executed (run-once).
 // ============================================================================
