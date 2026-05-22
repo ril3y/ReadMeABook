@@ -27,6 +27,7 @@ export type JobType =
   | 'find_missing_ebooks'
   | 'cleanup_seeded_torrents'
   | 'detect_stalled_downloads'
+  | 'give_up_stuck_searches'
   | 'monitor_rss_feeds'
   | 'sync_reading_shelves'
   | 'check_watched_lists'
@@ -116,6 +117,10 @@ export interface CleanupSeededTorrentsPayload extends JobPayload {
 }
 
 export interface DetectStalledDownloadsPayload extends JobPayload {
+  scheduledJobId?: string;
+}
+
+export interface GiveUpStuckSearchesPayload extends JobPayload {
   scheduledJobId?: string;
 }
 
@@ -412,6 +417,12 @@ export class JobQueueService {
       const { processDetectStalledDownloads } = await import('../processors/detect-stalled-downloads.processor');
       const payloadWithJobId = await this.ensureJobRecord(job, 'detect_stalled_downloads');
       return await processDetectStalledDownloads(payloadWithJobId);
+    });
+
+    this.queue.process('give_up_stuck_searches', 1, async (job: BullJob<GiveUpStuckSearchesPayload>) => {
+      const { processGiveUpStuckSearches } = await import('../processors/give-up-stuck-searches.processor');
+      const payloadWithJobId = await this.ensureJobRecord(job, 'give_up_stuck_searches');
+      return await processGiveUpStuckSearches(payloadWithJobId);
     });
 
     this.queue.process('sync_reading_shelves', 1, async (job: BullJob<SyncShelvesPayload>) => {
@@ -820,6 +831,22 @@ export class JobQueueService {
       } as DetectStalledDownloadsPayload,
       {
         priority: 8,
+      }
+    );
+  }
+
+  /**
+   * Add give-up stuck searches job (marks long-stuck awaiting_search requests
+   * as failed when they cross the give-up thresholds).
+   */
+  async addGiveUpStuckSearchesJob(scheduledJobId?: string): Promise<string> {
+    return await this.addJob(
+      'give_up_stuck_searches',
+      {
+        scheduledJobId,
+      } as GiveUpStuckSearchesPayload,
+      {
+        priority: 9,
       }
     );
   }

@@ -24,6 +24,8 @@ const logger = RMABLogger.create('API.Admin.Settings.Automation');
 const CONFIG_KEY_STALL_TIMEOUT = 'automation.stall_timeout_days';
 const CONFIG_KEY_MAX_PROGRESS = 'automation.stall_swap_max_progress';
 const CONFIG_KEY_GLOBAL_THRESHOLD = 'automation.global_block_threshold';
+const CONFIG_KEY_GIVE_UP_DAYS = 'automation.give_up_after_days';
+const CONFIG_KEY_GIVE_UP_ATTEMPTS = 'automation.give_up_after_attempts';
 
 const DEFAULT_STALL_TIMEOUT_DAYS = 7;
 const MIN_STALL_TIMEOUT_DAYS = 1;
@@ -33,6 +35,9 @@ const DEFAULT_MAX_PROGRESS = 50;
 const DEFAULT_GLOBAL_THRESHOLD = 3;
 const MIN_GLOBAL_THRESHOLD = 1;
 const MAX_GLOBAL_THRESHOLD = 100;
+
+const DEFAULT_GIVE_UP_DAYS = 60;
+const DEFAULT_GIVE_UP_ATTEMPTS = 10;
 
 function parseStallTimeout(raw: string | null | undefined): number {
   if (!raw) return DEFAULT_STALL_TIMEOUT_DAYS;
@@ -55,6 +60,20 @@ function parseGlobalThreshold(raw: string | null | undefined): number {
   return Math.min(Math.max(n, MIN_GLOBAL_THRESHOLD), MAX_GLOBAL_THRESHOLD);
 }
 
+function parseGiveUpDays(raw: string | null | undefined): number {
+  if (!raw) return DEFAULT_GIVE_UP_DAYS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_GIVE_UP_DAYS;
+  return Math.min(Math.max(n, 1), 365);
+}
+
+function parseGiveUpAttempts(raw: string | null | undefined): number {
+  if (!raw) return DEFAULT_GIVE_UP_ATTEMPTS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_GIVE_UP_ATTEMPTS;
+  return Math.min(Math.max(n, 1), 1000);
+}
+
 /**
  * GET /api/admin/settings/automation
  * Returns the current automation options.
@@ -64,15 +83,19 @@ export async function GET(request: NextRequest) {
     return requireAdmin(req, async () => {
       try {
         const configService = getConfigService();
-        const [t, p, g] = await Promise.all([
+        const [t, p, g, gd, ga] = await Promise.all([
           configService.get(CONFIG_KEY_STALL_TIMEOUT),
           configService.get(CONFIG_KEY_MAX_PROGRESS),
           configService.get(CONFIG_KEY_GLOBAL_THRESHOLD),
+          configService.get(CONFIG_KEY_GIVE_UP_DAYS),
+          configService.get(CONFIG_KEY_GIVE_UP_ATTEMPTS),
         ]);
         return NextResponse.json({
           stallTimeoutDays: parseStallTimeout(t),
           stallSwapMaxProgress: parseMaxProgress(p),
           globalBlockThreshold: parseGlobalThreshold(g),
+          giveUpAfterDays: parseGiveUpDays(gd),
+          giveUpAfterAttempts: parseGiveUpAttempts(ga),
         });
       } catch (error) {
         logger.error('Failed to fetch automation options', {
@@ -96,7 +119,13 @@ export async function PUT(request: NextRequest) {
     return requireAdmin(req, async () => {
       try {
         const body = await request.json();
-        const { stallTimeoutDays, stallSwapMaxProgress, globalBlockThreshold } = body ?? {};
+        const {
+          stallTimeoutDays,
+          stallSwapMaxProgress,
+          globalBlockThreshold,
+          giveUpAfterDays,
+          giveUpAfterAttempts,
+        } = body ?? {};
 
         // Each field is optional but if present must be a number — admin UI
         // submits the whole block together so practically all three arrive,
@@ -152,9 +181,37 @@ export async function PUT(request: NextRequest) {
           });
         }
 
+        let clampedGiveUpDays: number | undefined;
+        if (giveUpAfterDays !== undefined) {
+          if (typeof giveUpAfterDays !== 'number' || !Number.isFinite(giveUpAfterDays)) {
+            return NextResponse.json({ error: 'giveUpAfterDays must be a number' }, { status: 400 });
+          }
+          clampedGiveUpDays = Math.min(Math.max(Math.floor(giveUpAfterDays), 1), 365);
+          updates.push({
+            key: CONFIG_KEY_GIVE_UP_DAYS,
+            value: String(clampedGiveUpDays),
+            description:
+              'Days a request can stay in `awaiting_search` (with N+ attempts) before being auto-failed',
+          });
+        }
+
+        let clampedGiveUpAttempts: number | undefined;
+        if (giveUpAfterAttempts !== undefined) {
+          if (typeof giveUpAfterAttempts !== 'number' || !Number.isFinite(giveUpAfterAttempts)) {
+            return NextResponse.json({ error: 'giveUpAfterAttempts must be a number' }, { status: 400 });
+          }
+          clampedGiveUpAttempts = Math.min(Math.max(Math.floor(giveUpAfterAttempts), 1), 1000);
+          updates.push({
+            key: CONFIG_KEY_GIVE_UP_ATTEMPTS,
+            value: String(clampedGiveUpAttempts),
+            description:
+              'Minimum search-attempt count before a request becomes auto-fail eligible',
+          });
+        }
+
         if (updates.length === 0) {
           return NextResponse.json(
-            { error: 'Provide at least one of stallTimeoutDays, stallSwapMaxProgress, globalBlockThreshold' },
+            { error: 'Provide at least one of stallTimeoutDays, stallSwapMaxProgress, globalBlockThreshold, giveUpAfterDays, giveUpAfterAttempts' },
             { status: 400 }
           );
         }
@@ -167,6 +224,8 @@ export async function PUT(request: NextRequest) {
           stallTimeoutDays: clampedTimeout,
           stallSwapMaxProgress: clampedMaxProgress,
           globalBlockThreshold: clampedThreshold,
+          giveUpAfterDays: clampedGiveUpDays,
+          giveUpAfterAttempts: clampedGiveUpAttempts,
         });
 
         return NextResponse.json({
@@ -175,6 +234,8 @@ export async function PUT(request: NextRequest) {
           stallTimeoutDays: clampedTimeout,
           stallSwapMaxProgress: clampedMaxProgress,
           globalBlockThreshold: clampedThreshold,
+          giveUpAfterDays: clampedGiveUpDays,
+          giveUpAfterAttempts: clampedGiveUpAttempts,
         });
       } catch (error) {
         logger.error('Failed to update automation options', {

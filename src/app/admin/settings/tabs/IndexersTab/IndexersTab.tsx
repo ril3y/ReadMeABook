@@ -298,6 +298,71 @@ export function IndexersTab({
           <div className="flex items-start gap-4">
             <div className="flex-1">
               <label
+                htmlFor="give-up-after-attempts"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Auto-fail requests after
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-3">
+                Requests in <code className="text-xs">awaiting_search</code> with this many failed search attempts AND older than the day threshold (below) get marked <code className="text-xs">failed</code> by the daily give-up pass. Default 10 attempts &times; 60 days is conservative &mdash; nothing auto-fails until the rotation has had time to confirm content really isn&apos;t available. Lower these to prune more aggressively.
+              </p>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    id="give-up-after-attempts"
+                    min={1}
+                    max={1000}
+                    step={1}
+                    value={settings.automation.giveUpAfterAttempts}
+                    onChange={(e) => {
+                      const raw = Number.parseInt(e.target.value, 10);
+                      const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 10;
+                      onChange({
+                        ...settings,
+                        automation: {
+                          ...settings.automation,
+                          giveUpAfterAttempts: next,
+                        },
+                      });
+                    }}
+                    className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-600 dark:text-gray-400">attempts</span>
+                </div>
+                <span className="text-sm text-gray-500 dark:text-gray-400">&amp;</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    id="give-up-after-days"
+                    min={1}
+                    max={365}
+                    step={1}
+                    value={settings.automation.giveUpAfterDays}
+                    onChange={(e) => {
+                      const raw = Number.parseInt(e.target.value, 10);
+                      const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 365) : 60;
+                      onChange({
+                        ...settings,
+                        automation: {
+                          ...settings.automation,
+                          giveUpAfterDays: next,
+                        },
+                      });
+                    }}
+                    className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-600 dark:text-gray-400">days</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mt-3">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label
                 htmlFor="global-block-threshold"
                 className="block text-sm font-medium text-gray-900 dark:text-gray-100"
               >

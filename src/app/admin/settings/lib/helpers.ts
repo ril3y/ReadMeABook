@@ -136,6 +136,8 @@ export const saveTabSettings = async (
           stallTimeoutDays: settings.automation.stallTimeoutDays,
           stallSwapMaxProgress: settings.automation.stallSwapMaxProgress,
           globalBlockThreshold: settings.automation.globalBlockThreshold,
+          giveUpAfterDays: settings.automation.giveUpAfterDays,
+          giveUpAfterAttempts: settings.automation.giveUpAfterAttempts,
         }),
       }).then(res => {
         if (!res.ok) throw new Error('Failed to save automation options');

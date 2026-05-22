@@ -22,7 +22,7 @@ const STALE_NAME_REWRITES: ReadonlyArray<{
   { type: 'plex_recently_added_check', staleName: 'Plex Recently Added Check', neutralName: 'Recently Added Check' },
 ];
 
-export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads';
+export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'detect_stalled_downloads' | 'give_up_stuck_searches';
 
 export interface ScheduledJob {
   id: string;
@@ -170,6 +170,15 @@ export class SchedulerService {
         type: 'detect_stalled_downloads' as ScheduledJobType,
         schedule: '0 * * * *', // Every hour
         enabled: true, // Enable by default; timeout configurable via `automation.stall_timeout_days`
+        payload: {},
+      },
+      {
+        name: 'Give Up Stuck Searches',
+        type: 'give_up_stuck_searches' as ScheduledJobType,
+        // Daily at 01:00 — after retry-missing-torrents (midnight) so any
+        // last-chance hits accumulate first.
+        schedule: '0 1 * * *',
+        enabled: true, // Defaults to 10 attempts AND 60+ days, so won't auto-fail anything until the rotation builds up evidence.
         payload: {},
       },
     ];
@@ -448,6 +457,9 @@ export class SchedulerService {
         break;
       case 'detect_stalled_downloads':
         bullJobId = await this.triggerDetectStalledDownloads(job);
+        break;
+      case 'give_up_stuck_searches':
+        bullJobId = await this.triggerGiveUpStuckSearches(job);
         break;
       default:
         throw new Error(`Unknown job type: ${job.type}`);
@@ -743,6 +755,13 @@ export class SchedulerService {
    */
   private async triggerDetectStalledDownloads(job: any): Promise<string> {
     return await this.jobQueue.addDetectStalledDownloadsJob(job.id);
+  }
+
+  /**
+   * Trigger give-up pass (marks long-stuck awaiting_search requests as failed).
+   */
+  private async triggerGiveUpStuckSearches(job: any): Promise<string> {
+    return await this.jobQueue.addGiveUpStuckSearchesJob(job.id);
   }
 }
 
