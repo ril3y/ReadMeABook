@@ -157,8 +157,6 @@ export async function processFindMissingSeriesBooks(
         // — only 8 visible per page). Cap at 10 pages (~80 books) which
         // covers virtually every real series + bounds the scrape cost.
         const MAX_PAGES = 10;
-        const allCatalogBooks: typeof seriesDetail extends infer T ? T : never = [] as any;
-        // We need the typed array for later filter steps — gather books here:
         const catalogBooks: Array<{ asin?: string; title?: string; author?: string; narrator?: string; description?: string; coverArtUrl?: string; seriesPart?: string }> = [];
         let seriesTitleFromScrape: string | null = null;
         let page = 1;
@@ -177,8 +175,6 @@ export async function processFindMissingSeriesBooks(
           hasMore = detail.hasMore === true;
           page++;
         }
-        // void allCatalogBooks; — silence the unused-variable lint
-        void allCatalogBooks;
 
         if (catalogBooks.length === 0) {
           continue;
