@@ -55,6 +55,23 @@ function LibrarySeriesTile({ series }: { series: LibrarySeries }) {
   const href = series.asin
     ? `/series/${series.asin}`
     : `/search?q=${encodeURIComponent(series.title)}`;
+
+  // Count badge: when we have a known catalog total, render "X / Y total"
+  // and surface how many books the user is missing. When totalBooks is
+  // unknown (no Audible mapping yet, or the cache hasn't backfilled), we
+  // fall back to the existing "X book(s)" rendering rather than guessing.
+  const hasTotal = typeof series.totalBooks === 'number' && series.totalBooks > 0;
+  const missing = hasTotal ? Math.max(0, (series.totalBooks as number) - series.bookCount) : 0;
+  const complete = hasTotal && missing === 0;
+  const countLabel = hasTotal
+    ? `${series.bookCount} / ${series.totalBooks} total`
+    : `${series.bookCount} ${series.bookCount === 1 ? 'book' : 'books'}`;
+  const countBadgeClasses = complete
+    ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200'
+    : hasTotal
+      ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200'
+      : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200';
+
   return (
     <Link
       href={href}
@@ -65,9 +82,22 @@ function LibrarySeriesTile({ series }: { series: LibrarySeries }) {
         <h3 className="font-semibold text-gray-900 dark:text-gray-100 truncate group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
           {series.title}
         </h3>
-        <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-200">
-          {series.bookCount} {series.bookCount === 1 ? 'book' : 'books'}
-        </span>
+        <div className="shrink-0 flex items-center gap-1.5">
+          {hasTotal && missing > 0 && (
+            <span
+              className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200"
+              title={`${missing} book${missing === 1 ? '' : 's'} not in your library`}
+            >
+              {missing} missing
+            </span>
+          )}
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${countBadgeClasses}`}
+            title={hasTotal ? `${series.bookCount} owned of ${series.totalBooks} in the series` : undefined}
+          >
+            {countLabel}
+          </span>
+        </div>
       </div>
     </Link>
   );

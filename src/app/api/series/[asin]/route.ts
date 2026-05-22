@@ -11,6 +11,7 @@ import { enrichAudiobooksWithMatches } from '@/lib/utils/audiobook-matcher';
 import { deduplicateAndCollectGroups } from '@/lib/utils/deduplicate-audiobooks';
 import { persistDedupGroups, collapseByExistingWorks } from '@/lib/services/works.service';
 import { annotateWithIgnoreStatus } from '@/lib/utils/ignored-audiobooks';
+import { upsertSeriesCatalog } from '@/lib/services/series-catalog.service';
 
 const logger = RMABLogger.create('API.Series.Detail');
 
@@ -69,6 +70,19 @@ export async function GET(
 
     // Annotate with per-user ignore status
     const annotatedBooks = await annotateWithIgnoreStatus(enrichedBooks, userId);
+
+    // Keep the series_catalog cache fresh on every scrape. This is how
+    // /api/library/series gets accurate "X / Y total" denominators
+    // without a dedicated job. Best-effort — never blocks the response.
+    if (detail.asin && detail.bookCount > 0 && page === 1) {
+      void upsertSeriesCatalog({
+        seriesAsin: detail.asin,
+        title: detail.title,
+        totalBooks: detail.bookCount,
+        coverArtUrl: detail.books[0]?.coverArtUrl ?? null,
+        audibleUrl: detail.audibleUrl,
+      });
+    }
 
     logger.info(`Series detail complete: "${detail.title}" (${annotatedBooks.length} books, page ${page})`);
 

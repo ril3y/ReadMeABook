@@ -12,6 +12,11 @@
  * scan-plex job from ABS metadata). No more JOIN to the audiobooks table,
  * which previously undercounted because only books that had been
  * *requested* through RMAB created an Audiobook row with series info.
+ *
+ * Each row may carry an optional `totalBooks` denominator sourced from
+ * the series_catalog cache (populated by /api/series/{asin} on every
+ * scrape, plus background refreshes for stale entries). When unknown,
+ * the field is simply absent and the UI falls back to "X owned".
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,6 +24,11 @@ import { requireAuth, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { prisma } from '@/lib/db';
 import { resolveLibraryId } from '@/lib/services/library-id';
 import { RMABLogger } from '@/lib/utils/logger';
+import {
+  getSeriesCatalogByAsins,
+  pickStaleAsins,
+  refreshSeriesCatalogInBackground,
+} from '@/lib/services/series-catalog.service';
 import type { Prisma } from '@/generated/prisma';
 
 const logger = RMABLogger.create('API.Library.Series');
@@ -28,6 +38,7 @@ interface SeriesAggregate {
   bookCount: number;
   asin: string | null;          // series ASIN (from audiobooks lookup) if known
   coverArtUrl?: string;
+  totalBooks?: number;          // From the series_catalog cache; absent when we don't yet know.
 }
 
 async function getLibrarySeries(req: AuthenticatedRequest) {
@@ -95,6 +106,33 @@ async function getLibrarySeries(req: AuthenticatedRequest) {
       all = all.filter(s => s.title.toLowerCase().includes(search));
     }
     all.sort((a, b) => a.title.localeCompare(b.title));
+
+    // Series totals enrichment: look up `total_books` from the
+    // series_catalog cache for any series tile that has an ASIN. Series
+    // without an ASIN (no Audible mapping) just don't get a denominator.
+    //
+    // This is purely additive — if the cache lookup fails, we still
+    // return the owned-count list. Missing/stale entries are refreshed
+    // in the background so the *next* page render has them.
+    const asinsWithSeries = all
+      .map((s) => s.asin)
+      .filter((a): a is string => !!a);
+    if (asinsWithSeries.length > 0) {
+      const catalog = await getSeriesCatalogByAsins(asinsWithSeries);
+      for (const s of all) {
+        if (!s.asin) continue;
+        const entry = catalog.get(s.asin.toLowerCase());
+        if (entry) s.totalBooks = entry.totalBooks;
+      }
+      const stale = pickStaleAsins(
+        all.filter((s) => !!s.asin).map((s) => ({ seriesAsin: s.asin as string, title: s.title })),
+        catalog
+      );
+      if (stale.length > 0) {
+        // Fire-and-forget — bounded internally to avoid scrape storms.
+        refreshSeriesCatalogInBackground(stale);
+      }
+    }
 
     return NextResponse.json({
       success: true,

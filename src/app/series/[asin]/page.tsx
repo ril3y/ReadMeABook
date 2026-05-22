@@ -78,7 +78,7 @@ export default function SeriesDetailPage({
           {seriesLoading ? (
             <SeriesDetailSkeleton squareCovers={squareCovers} />
           ) : series ? (
-            <SeriesDetailCard series={series} squareCovers={squareCovers} />
+            <SeriesDetailCard series={series} squareCovers={squareCovers} hasMore={hasMore} />
           ) : (
             <div className="text-center py-16 space-y-4">
               <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -123,13 +123,16 @@ export default function SeriesDetailPage({
                 </div>
               </div>
 
-              {/* Books Grid */}
+              {/* Books Grid — highlight missing books so users can spot
+                  gaps in the series at a glance. The Request action is
+                  already accessible via the standard hover overlay. */}
               <AudiobookGrid
                 audiobooks={filteredBooks}
                 isLoading={seriesLoading}
                 emptyMessage={`No books found for ${series.title}`}
                 cardSize={cardSize}
                 squareCovers={squareCovers}
+                highlightMissing
               />
 
               {/* Load More Bar */}

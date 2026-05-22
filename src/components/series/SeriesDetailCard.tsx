@@ -18,12 +18,31 @@ const PLACEHOLDER_COVER = '/placeholder_cover.svg';
 interface SeriesDetailCardProps {
   series: SeriesDetail;
   squareCovers?: boolean;
+  /**
+   * Whether more pages of books are still load-pending. When true we
+   * dampen the owned/missing rollup ("X owned so far") instead of
+   * publishing a count that can't be honestly computed yet.
+   */
+  hasMore?: boolean;
 }
 
-export function SeriesDetailCard({ series, squareCovers = false }: SeriesDetailCardProps) {
+export function SeriesDetailCard({ series, squareCovers = false, hasMore = false }: SeriesDetailCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [coverError, setCoverError] = useState(false);
   const hasLongDescription = (series.description?.length || 0) > 300;
+
+  // Owned/missing rollup. Books in series.books have already been
+  // enriched with isAvailable (and requestStatus === 'completed' for
+  // titles fully processed through RMAB). We only count what we've
+  // loaded — when load-more pages are still pending we can't honestly
+  // call any title "missing" (we just haven't looked at it yet), so we
+  // hide the missing pill and qualify the owned pill with "so far".
+  const ownedCount = series.books.reduce((n, b) => {
+    return n + (b.isAvailable || b.requestStatus === 'completed' ? 1 : 0);
+  }, 0);
+  const fullyLoaded = !hasMore && series.books.length >= series.bookCount;
+  const missingCount = fullyLoaded ? Math.max(0, series.bookCount - ownedCount) : 0;
+  const isComplete = fullyLoaded && series.bookCount > 0 && missingCount === 0;
 
   return (
     <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 sm:gap-8">
@@ -58,7 +77,7 @@ export function SeriesDetailCard({ series, squareCovers = false }: SeriesDetailC
           {series.title}
         </h1>
 
-        {/* Meta row: book count + rating */}
+        {/* Meta row: book count + ownership rollup + rating */}
         <div className="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-3">
           {series.bookCount > 0 && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-300">
@@ -66,6 +85,34 @@ export function SeriesDetailCard({ series, squareCovers = false }: SeriesDetailC
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
               </svg>
               {series.bookCount} Book{series.bookCount !== 1 ? 's' : ''}
+            </span>
+          )}
+
+          {series.bookCount > 0 && (
+            <span
+              className={`inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-full ${
+                isComplete
+                  ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-200'
+                  : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-200'
+              }`}
+              title={
+                isComplete
+                  ? 'You own every book in this series'
+                  : fullyLoaded
+                    ? `${ownedCount} owned of ${series.bookCount} in the series`
+                    : `${ownedCount} owned so far — more books still loading`
+              }
+            >
+              {ownedCount} / {series.bookCount} owned{fullyLoaded ? '' : ' so far'}
+            </span>
+          )}
+
+          {missingCount > 0 && (
+            <span
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-full bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-200"
+              title={`${missingCount} book${missingCount === 1 ? '' : 's'} not in your library`}
+            >
+              {missingCount} missing
             </span>
           )}
 
