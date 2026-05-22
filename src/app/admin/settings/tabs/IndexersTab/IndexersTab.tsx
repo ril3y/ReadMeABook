@@ -176,6 +176,45 @@ export function IndexersTab({
             </div>
           </div>
         </div>
+
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 mt-3">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <label
+                htmlFor="stall-timeout-days"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Auto-swap stalled downloads after
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-3">
+                Days a download can stay in <code className="text-xs">downloading</code> status before the release is auto-blocked and a new search is queued. Hourly background pass; up to 50 stalls handled per run. Range 1&ndash;365 days.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  id="stall-timeout-days"
+                  min={1}
+                  max={365}
+                  step={1}
+                  value={settings.automation.stallTimeoutDays}
+                  onChange={(e) => {
+                    const raw = Number.parseInt(e.target.value, 10);
+                    const next = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 365) : 7;
+                    onChange({
+                      ...settings,
+                      automation: {
+                        ...settings.automation,
+                        stallTimeoutDays: next,
+                      },
+                    });
+                  }}
+                  className="w-24 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-600 dark:text-gray-400">days</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="border-t border-gray-200 dark:border-gray-700 pt-6">

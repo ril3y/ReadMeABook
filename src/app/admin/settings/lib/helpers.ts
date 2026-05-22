@@ -124,6 +124,19 @@ export const saveTabSettings = async (
       }).then(res => {
         if (!res.ok) throw new Error('Failed to save indexer options');
       });
+
+      // Save automation options (stall-timeout etc). Lives in the Indexers tab
+      // for now since it's an auto-search-adjacent knob, but the backing
+      // config category is `automation`.
+      await fetchWithAuth('/api/admin/settings/automation', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stallTimeoutDays: settings.automation.stallTimeoutDays,
+        }),
+      }).then(res => {
+        if (!res.ok) throw new Error('Failed to save automation options');
+      });
       break;
 
     case 'download':
