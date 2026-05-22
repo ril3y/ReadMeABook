@@ -20,6 +20,12 @@ export interface LibrarySeries {
   bookCount: number;
   asin: string | null;
   coverArtUrl?: string;
+  /**
+   * Total books in the series according to Audible (via the series_catalog
+   * cache). Optional — undefined when we haven't scraped the series yet.
+   * The UI renders "X owned / Y total" when present, "X owned" when not.
+   */
+  totalBooks?: number;
 }
 
 interface LibrarySeriesResponse {
