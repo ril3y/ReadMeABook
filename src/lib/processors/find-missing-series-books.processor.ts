@@ -151,15 +151,41 @@ export async function processFindMissingSeriesBooks(
       }
 
       try {
-        const seriesDetail = await scrapeSeriesPage(ws.seriesAsin, 1);
-        if (!seriesDetail || !seriesDetail.books || seriesDetail.books.length === 0) {
-          logger.warn(`No catalog returned for series ${ws.seriesAsin} ("${ws.seriesTitle}")`);
-          scrapeFailures++;
+        // Scrape ALL pages of the Audible series catalog. Earlier version
+        // only fetched page 1 (~8 books per page) which silently dropped
+        // 50-90% of the catalog for long series (e.g. 19-book Lincoln Lawyer
+        // — only 8 visible per page). Cap at 10 pages (~80 books) which
+        // covers virtually every real series + bounds the scrape cost.
+        const MAX_PAGES = 10;
+        const allCatalogBooks: typeof seriesDetail extends infer T ? T : never = [] as any;
+        // We need the typed array for later filter steps — gather books here:
+        const catalogBooks: Array<{ asin?: string; title?: string; author?: string; narrator?: string; description?: string; coverArtUrl?: string; seriesPart?: string }> = [];
+        let seriesTitleFromScrape: string | null = null;
+        let page = 1;
+        let hasMore = true;
+        while (hasMore && page <= MAX_PAGES) {
+          const detail = await scrapeSeriesPage(ws.seriesAsin, page);
+          if (!detail || !detail.books || detail.books.length === 0) {
+            if (page === 1) {
+              logger.warn(`No catalog returned for series ${ws.seriesAsin} ("${ws.seriesTitle}")`);
+              scrapeFailures++;
+            }
+            break;
+          }
+          if (page === 1) seriesTitleFromScrape = detail.title;
+          catalogBooks.push(...detail.books);
+          hasMore = detail.hasMore === true;
+          page++;
+        }
+        // void allCatalogBooks; — silence the unused-variable lint
+        void allCatalogBooks;
+
+        if (catalogBooks.length === 0) {
           continue;
         }
 
         seriesProcessed++;
-        const catalogAsins = seriesDetail.books.map(b => b.asin).filter(Boolean);
+        const catalogAsins = catalogBooks.map(b => b.asin).filter((a): a is string => !!a);
 
         // Which of these are already owned (in ABS library cache)?
         const ownedRows = await prisma.plexLibrary.findMany({
@@ -167,9 +193,13 @@ export async function processFindMissingSeriesBooks(
           select: { asin: true },
         });
         const ownedSet = new Set(ownedRows.map(r => r.asin).filter((a): a is string => !!a));
-        const missingBooks = seriesDetail.books.filter(b => b.asin && !ownedSet.has(b.asin));
+        const missingBooks = catalogBooks.filter(b => b.asin && !ownedSet.has(b.asin));
 
-        logger.info(`Series "${ws.seriesTitle}": ${seriesDetail.books.length} catalog, ${ownedSet.size} owned, ${missingBooks.length} missing`);
+        logger.info(`Series "${ws.seriesTitle}": ${catalogBooks.length} catalog (${page - 1} pages scraped), ${ownedSet.size} owned, ${missingBooks.length} missing`);
+        // (seriesTitleFromScrape is captured for future use — surfacing it
+        // in result.message would let admins see "Resolved series title:
+        // 'Foo'" but isn't required for correctness.)
+        void seriesTitleFromScrape;
 
         if (missingBooks.length === 0) {
           // Stamp lastCheckedAt anyway so the cooldown advances.

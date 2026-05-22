@@ -12,7 +12,7 @@
 
 'use client';
 
-import { use as usePromise } from 'react';
+import { use as usePromise, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { Header } from '@/components/layout/Header';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
@@ -21,6 +21,7 @@ import { useLibrarySeriesDetail } from '@/lib/hooks/useLibrarySeriesDetail';
 import { CardSizeControls } from '@/components/ui/CardSizeControls';
 import { SquareCoversToggle } from '@/components/ui/SquareCoversToggle';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { fetchWithAuth } from '@/lib/utils/api';
 
 interface PageProps {
   params: Promise<{ name: string }>;
@@ -30,6 +31,36 @@ function LibrarySeriesContent({ name }: { name: string }) {
   const { series, books, bookCount, seriesAsin, totalBooks, author, isLoading, error } =
     useLibrarySeriesDetail(name);
   const { cardSize, setCardSize, squareCovers, setSquareCovers } = usePreferences();
+
+  // Fill-gaps state: queues the find-missing-series-books processor in
+  // single-series mode for this seriesAsin so RMAB requests every book in
+  // the Audible catalog the user doesn't already own.
+  const [fillingGaps, setFillingGaps] = useState(false);
+  const [fillMessage, setFillMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+
+  const handleFillGaps = useCallback(async () => {
+    if (!seriesAsin) return;
+    setFillingGaps(true);
+    setFillMessage(null);
+    try {
+      const res = await fetchWithAuth(`/api/series/${seriesAsin}/fill-gaps`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setFillMessage({
+        kind: 'success',
+        text: 'Queued — missing books will appear as new requests within a minute.',
+      });
+    } catch (err) {
+      setFillMessage({
+        kind: 'error',
+        text: err instanceof Error ? err.message : 'Fill-gaps failed',
+      });
+    } finally {
+      setFillingGaps(false);
+    }
+  }, [seriesAsin]);
 
   if (error) {
     return (
@@ -76,18 +107,42 @@ function LibrarySeriesContent({ name }: { name: string }) {
           </p>
         </div>
 
-        {/* When we have a resolved seriesAsin, deep-link to the full Audible
-            catalog page where the Fill-gaps button + per-book request UI live. */}
+        {/* When we have a resolved seriesAsin AND there are missing books,
+            offer the one-click "Request all missing" action that queues the
+            find-missing-series-books processor in single-series mode.
+            Plus a secondary deep-link to the full Audible catalog view. */}
         {seriesAsin && (
-          <Link
-            href={`/series/${seriesAsin}`}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+          <div className="flex flex-wrap items-center gap-3">
+            {missing !== null && missing > 0 && (
+              <button
+                onClick={handleFillGaps}
+                disabled={fillingGaps}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 rounded-md"
+              >
+                {fillingGaps ? 'Queueing…' : `Request all ${missing} missing book${missing === 1 ? '' : 's'}`}
+              </button>
+            )}
+            <Link
+              href={`/series/${seriesAsin}`}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"
+            >
+              View full catalog on Audible
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+            </Link>
+          </div>
+        )}
+        {fillMessage && (
+          <div
+            className={`rounded-lg p-3 text-sm ${
+              fillMessage.kind === 'success'
+                ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
+            }`}
           >
-            View full series catalog on Audible
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          </Link>
+            {fillMessage.text}
+          </div>
         )}
 
         {/* When we DON'T have a seriesAsin yet, surface that we'll find it
