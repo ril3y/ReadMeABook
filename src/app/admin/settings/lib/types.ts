@@ -123,6 +123,19 @@ export interface AutomationSettings {
    * Backing config key: `automation.global_block_threshold`.
    */
   globalBlockThreshold: number;
+  /**
+   * Days a request can stay in `awaiting_search` (with N+ attempts accumulated)
+   * before the give-up-stuck-searches processor auto-marks it as `failed`.
+   * Clamped 1..365, default 60.
+   * Backing config key: `automation.give_up_after_days`.
+   */
+  giveUpAfterDays: number;
+  /**
+   * Minimum number of failed search attempts before a long-stuck request
+   * becomes eligible for auto-failure. Clamped 1..1000, default 10.
+   * Backing config key: `automation.give_up_after_attempts`.
+   */
+  giveUpAfterAttempts: number;
 }
 
 /**

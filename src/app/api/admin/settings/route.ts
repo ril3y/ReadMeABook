@@ -118,6 +118,18 @@ export async function GET(request: NextRequest) {
           if (!Number.isFinite(n) || n < 1) return 3;
           return Math.min(Math.max(n, 1), 100);
         })(),
+        giveUpAfterDays: (() => {
+          const raw = configMap.get('automation.give_up_after_days');
+          const n = raw ? Number.parseInt(raw, 10) : NaN;
+          if (!Number.isFinite(n) || n < 1) return 60;
+          return Math.min(Math.max(n, 1), 365);
+        })(),
+        giveUpAfterAttempts: (() => {
+          const raw = configMap.get('automation.give_up_after_attempts');
+          const n = raw ? Number.parseInt(raw, 10) : NaN;
+          if (!Number.isFinite(n) || n < 1) return 10;
+          return Math.min(Math.max(n, 1), 1000);
+        })(),
       },
       // downloadClient is populated from multi-client format for backward compatibility
       // The DownloadTab component now uses DownloadClientManagement which reads from /api/admin/settings/download-clients
