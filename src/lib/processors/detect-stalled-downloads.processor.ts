@@ -347,11 +347,31 @@ export async function processDetectStalledDownloads(
         if (candidates.length > 0) {
           const hashes = candidates.map(t => t.id.toLowerCase());
           // One bulk lookup instead of N queries — much faster on large sets.
+          // We grab enough fields to (a) classify orphan vs stale-linked, and
+          // (b) reuse the Stage 1 swap pattern (block + search) when the
+          // backing Request is still in `awaiting_search` — closes the
+          // "deleted the torrent but RMAB doesn't know to find a replacement"
+          // gap by mirroring the same block-and-research flow.
           const dhRows = await prisma.downloadHistory.findMany({
             where: { torrentHash: { in: hashes } },
             select: {
+              id: true,
               torrentHash: true,
-              request: { select: { id: true, status: true, deletedAt: true } },
+              torrentName: true,
+              nzbId: true,
+              indexerName: true,
+              indexerId: true,
+              request: {
+                select: {
+                  id: true,
+                  status: true,
+                  type: true,
+                  deletedAt: true,
+                  audiobook: {
+                    select: { id: true, title: true, author: true, audibleAsin: true },
+                  },
+                },
+              },
             },
           });
           const dhByHash = new Map<string, typeof dhRows[number]>();
@@ -372,7 +392,76 @@ export async function processDetectStalledDownloads(
                 continue;
               }
 
-              // (a) or (b): delete from qBT WITH files.
+              // For stale-linked rows where the backing Request is still
+              // actively waiting on a new release (`awaiting_search`), do the
+              // full Stage-1-style swap BEFORE deleting the torrent: block
+              // the dead release, count toward the global threshold, and
+              // queue a fresh search. Without this step, retry-missing-torrents
+              // would re-grab the same stalled torrent on its next pass.
+              if (dh && !requestDeleted && requestStatus === 'awaiting_search' && dh.request && dh.torrentName) {
+                const stalledDays = t.addedAt
+                  ? Math.floor((Date.now() - t.addedAt.getTime()) / (24 * 60 * 60 * 1000))
+                  : timeoutDays;
+                const reason = `Stalled timeout (${stalledDays}d, threshold ${timeoutDays}d)`;
+                const releaseKey = normalizeReleaseKey(dh.torrentName);
+
+                await addAutoBlock({
+                  requestId: dh.request.id,
+                  releaseName: dh.torrentName,
+                  releaseHash: dh.torrentHash ?? dh.nzbId ?? null,
+                  indexerName: dh.indexerName ?? null,
+                  indexerId: dh.indexerId ?? null,
+                  source: 'download_fail',
+                  reason,
+                  reasonDetail: null,
+                  downloadHistoryId: dh.id,
+                  jobId,
+                });
+
+                // Promote to global if threshold reached (same as Stage 1)
+                const stallCount = await prisma.blockedRelease.count({
+                  where: {
+                    releaseKey,
+                    source: 'download_fail',
+                    reason: { startsWith: STALL_REASON_PREFIX },
+                  },
+                });
+                if (stallCount >= globalThreshold) {
+                  const promoted = await prisma.blockedRelease.updateMany({
+                    where: {
+                      releaseKey,
+                      source: 'download_fail',
+                      reason: { startsWith: STALL_REASON_PREFIX },
+                      global: false,
+                    },
+                    data: { global: true },
+                  });
+                  if (promoted.count > 0) {
+                    promotedToGlobal += promoted.count;
+                  }
+                }
+
+                // Queue a fresh search now (don't wait for daily retry-missing-torrents).
+                if (dh.request.audiobook) {
+                  if (dh.request.type === 'ebook') {
+                    await jobQueue.addSearchEbookJob(dh.request.id, {
+                      id: dh.request.audiobook.id,
+                      title: dh.request.audiobook.title,
+                      author: dh.request.audiobook.author,
+                      asin: dh.request.audiobook.audibleAsin || undefined,
+                    });
+                  } else {
+                    await jobQueue.addSearchJob(dh.request.id, {
+                      id: dh.request.audiobook.id,
+                      title: dh.request.audiobook.title,
+                      author: dh.request.audiobook.author,
+                      asin: dh.request.audiobook.audibleAsin || undefined,
+                    });
+                  }
+                }
+              }
+
+              // Always delete the torrent from qBT (with files).
               await torrentClient.deleteDownload(t.id, true);
               if (!dh) {
                 orphansDeleted++;
@@ -388,12 +477,13 @@ export async function processDetectStalledDownloads(
                   hash: t.id,
                   name: t.name,
                   requestStatus: requestStatus ?? 'request-deleted',
+                  reSearched: requestStatus === 'awaiting_search',
                   addedAt: t.addedAt?.toISOString(),
                 });
               }
             } catch (err) {
               qbtScanErrors++;
-              logger.warn(`Stage 2: failed to delete torrent`, {
+              logger.warn(`Stage 2: failed to handle torrent`, {
                 hash: t.id,
                 error: err instanceof Error ? err.message : String(err),
               });
