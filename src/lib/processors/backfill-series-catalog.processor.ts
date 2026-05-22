@@ -117,30 +117,36 @@ export async function processBackfillSeriesCatalog(
 
         // Step 2: Persist the audiobook row so future series-lookups (e.g.
         // /api/library/series enrichByName) can resolve this series → asin
-        // without re-scraping. Upsert keeps the row in sync if it already
-        // exists.
-        await prisma.audiobook.upsert({
+        // without re-scraping. `audibleAsin` is nullable on Audiobook so it
+        // lacks a unique constraint — use findFirst + update/create.
+        const existing = await prisma.audiobook.findFirst({
           where: { audibleAsin: book.asin },
-          create: {
-            audibleAsin: book.asin,
-            title: book.title,
-            author: book.author,
-            narrator: book.narrator ?? null,
-            description: book.description ?? null,
-            coverArtUrl: book.coverArtUrl ?? null,
-            durationMinutes: book.durationMinutes ?? null,
-            releaseDate: book.releaseDate ? new Date(book.releaseDate) : null,
-            series: book.series ?? null,
-            seriesPart: book.seriesPart ?? null,
-            seriesAsin: book.seriesAsin,
-            language: book.language ?? null,
-          },
-          update: {
-            series: book.series ?? null,
-            seriesPart: book.seriesPart ?? null,
-            seriesAsin: book.seriesAsin,
-          },
+          select: { id: true },
         });
+        if (existing) {
+          await prisma.audiobook.update({
+            where: { id: existing.id },
+            data: {
+              series: book.series ?? null,
+              seriesPart: book.seriesPart ?? null,
+              seriesAsin: book.seriesAsin,
+            },
+          });
+        } else {
+          await prisma.audiobook.create({
+            data: {
+              audibleAsin: book.asin,
+              title: book.title,
+              author: book.author,
+              narrator: book.narrator ?? null,
+              description: book.description ?? null,
+              coverArtUrl: book.coverArtUrl ?? null,
+              series: book.series ?? null,
+              seriesPart: book.seriesPart ?? null,
+              seriesAsin: book.seriesAsin,
+            },
+          });
+        }
 
         // Step 3: Scrape the series page to get totalBooks. Audnexus exposes
         // per-book seriesPrimary but does NOT expose a "list books in series"
