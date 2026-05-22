@@ -19,6 +19,7 @@ import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
 import { useLibraryAuthorDetail } from '@/lib/hooks/useLibraryAuthorDetail';
 import { CardSizeControls } from '@/components/ui/CardSizeControls';
 import { SquareCoversToggle } from '@/components/ui/SquareCoversToggle';
+import { WatchAuthorByNameButton } from '@/components/ui/WatchAuthorByNameButton';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import type { LibrarySeries } from '@/lib/hooks/useLibrarySeries';
 
@@ -76,15 +77,22 @@ function AuthorDetailContent({ name }: { name: string }) {
         </Link>
       </div>
 
-      <header className="space-y-1">
-        <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-100">
-          {author}
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400">
-          {isLoading ? 'Loading…' :
-            `${bookCount} ${bookCount === 1 ? 'book' : 'books'}` +
-            (seriesCount > 0 ? ` · ${seriesCount} ${seriesCount === 1 ? 'series' : 'series'}` : '')}
-        </p>
+      <header className="space-y-3">
+        <div className="space-y-1">
+          <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-100">
+            {author}
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            {isLoading ? 'Loading…' :
+              `${bookCount} ${bookCount === 1 ? 'book' : 'books'}` +
+              (seriesCount > 0 ? ` · ${seriesCount} ${seriesCount === 1 ? 'series' : 'series'}` : '')}
+          </p>
+        </div>
+        {/* Watch-for-new-releases: resolves the display name to an Audnexus
+            author ASIN on first click, then delegates to the standard
+            watched-authors hooks. The daily `check_watched_lists` scheduler
+            picks this up and auto-requests anything new the author publishes. */}
+        {!isLoading && author && <WatchAuthorByNameButton authorName={author} />}
       </header>
 
       {/* Series for this author (compact) */}
