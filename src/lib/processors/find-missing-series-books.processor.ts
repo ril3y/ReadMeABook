@@ -48,41 +48,86 @@ export async function processFindMissingSeriesBooks(
   const logger = RMABLogger.forJob(jobId, 'FindMissingSeriesBooks');
 
   try {
-    // Single-series mode (manual API call) bypasses the cooldown and
-    // watched-series gate. Scheduled mode walks all watched series whose
-    // cooldown has elapsed.
+    // Two modes:
+    //
+    //   Scheduled mode (no targetSeriesAsin): walks every watched_series row
+    //   whose cooldown has elapsed, processes up to 25/run.
+    //
+    //   Single-series mode (targetSeriesAsin set, from the "Fill gaps"
+    //   button API): processes ONE series directly. Does NOT require a
+    //   watched_series row to exist — the button is the user's signal that
+    //   they want this series filled, watched or not. Builds a synthetic
+    //   "row" so the rest of the loop is uniform.
     const cooldownAgo = new Date(Date.now() - COOLDOWN_MS);
-    const watchedSeries = targetSeriesAsin
-      ? await prisma.watchedSeries.findMany({
-          where: forcedUserId
-            ? { seriesAsin: targetSeriesAsin, userId: forcedUserId }
-            : { seriesAsin: targetSeriesAsin },
-          take: 1,
-        })
-      : await prisma.watchedSeries.findMany({
-          where: {
-            OR: [
-              { lastCheckedAt: null },
-              { lastCheckedAt: { lt: cooldownAgo } },
-            ],
-          },
-          orderBy: [
-            { lastCheckedAt: { sort: 'asc', nulls: 'first' } },
-            { createdAt: 'asc' },
+    type WatchedSeriesLike = {
+      id: string | null;
+      userId: string;
+      seriesAsin: string;
+      seriesTitle: string;
+    };
+
+    let watchedSeries: WatchedSeriesLike[];
+    if (targetSeriesAsin) {
+      if (!forcedUserId) {
+        logger.warn('Single-series mode requires a userId payload (manual button)');
+        return {
+          success: false,
+          message: 'Missing userId for single-series mode',
+          seriesChecked: 0,
+          requestsCreated: 0,
+          skipped: 0,
+        };
+      }
+      // Try to find an existing row so we can stamp lastCheckedAt; if none,
+      // fall through with a synthetic record (no row update at the end).
+      const existing = await prisma.watchedSeries.findFirst({
+        where: { seriesAsin: targetSeriesAsin, userId: forcedUserId },
+      });
+      watchedSeries = [
+        existing
+          ? {
+              id: existing.id,
+              userId: existing.userId,
+              seriesAsin: existing.seriesAsin,
+              seriesTitle: existing.seriesTitle,
+            }
+          : {
+              id: null,
+              userId: forcedUserId,
+              seriesAsin: targetSeriesAsin,
+              seriesTitle: '(not watched yet)',
+            },
+      ];
+      logger.info(
+        existing
+          ? `Single-series mode: processing watched series ${targetSeriesAsin}`
+          : `Single-series mode: processing unwatched series ${targetSeriesAsin} (manual fill-gaps)`
+      );
+    } else {
+      const rows = await prisma.watchedSeries.findMany({
+        where: {
+          OR: [
+            { lastCheckedAt: null },
+            { lastCheckedAt: { lt: cooldownAgo } },
           ],
-          // The per-run cap below counts created REQUESTS, but each watched
-          // series could yield many requests. We limit watched-series count
-          // here as a coarse outer cap to avoid scraping hundreds of Audible
-          // pages in one pass.
-          take: 25,
-        });
+        },
+        orderBy: [
+          { lastCheckedAt: { sort: 'asc', nulls: 'first' } },
+          { createdAt: 'asc' },
+        ],
+        // Outer cap so we don't scrape hundreds of Audible pages in one pass.
+        take: 25,
+      });
+      watchedSeries = rows.map(r => ({
+        id: r.id,
+        userId: r.userId,
+        seriesAsin: r.seriesAsin,
+        seriesTitle: r.seriesTitle,
+      }));
+    }
 
     if (watchedSeries.length === 0) {
-      logger.info(
-        targetSeriesAsin
-          ? `No watched_series row for ${targetSeriesAsin}`
-          : 'No watched series due for refresh (all within 1-day cooldown)'
-      );
+      logger.info('No watched series due for refresh (all within 1-day cooldown)');
       return {
         success: true,
         message: 'No watched series to process',
@@ -128,10 +173,12 @@ export async function processFindMissingSeriesBooks(
 
         if (missingBooks.length === 0) {
           // Stamp lastCheckedAt anyway so the cooldown advances.
-          await prisma.watchedSeries.update({
-            where: { id: ws.id },
-            data: { lastCheckedAt: new Date() },
-          });
+          if (ws.id) {
+            await prisma.watchedSeries.update({
+              where: { id: ws.id },
+              data: { lastCheckedAt: new Date() },
+            });
+          }
           continue;
         }
 
@@ -170,9 +217,15 @@ export async function processFindMissingSeriesBooks(
             });
           } else {
             skipped++;
-            logger.debug(`Skipped book (${result.reason})`, {
+            // Bump skip reasons to info-level so we can debug why a book
+            // didn't get a request (already-owned-by-title, duplicate
+            // request, ignored, etc.). The createRequestForUser layer
+            // already short-circuits the most common cases — surfacing
+            // them here makes the no-op visible to admins.
+            logger.info(`Skipped book (${result.reason}): ${result.message}`, {
               asin: book.asin,
               title: book.title,
+              series: ws.seriesTitle,
             });
           }
 
@@ -180,10 +233,12 @@ export async function processFindMissingSeriesBooks(
           await new Promise(resolve => setTimeout(resolve, 50));
         }
 
-        await prisma.watchedSeries.update({
-          where: { id: ws.id },
-          data: { lastCheckedAt: new Date() },
-        });
+        if (ws.id) {
+          await prisma.watchedSeries.update({
+            where: { id: ws.id },
+            data: { lastCheckedAt: new Date() },
+          });
+        }
       } catch (err) {
         logger.error(`Failed processing series ${ws.seriesAsin}`, {
           error: err instanceof Error ? err.message : String(err),
