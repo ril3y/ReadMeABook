@@ -59,9 +59,21 @@ interface SwapEntry {
   createdAt: string;
 }
 
+interface GlobalBlock {
+  releaseKey: string;
+  releaseName: string;
+  releaseHash: string | null;
+  indexerName: string | null;
+  reason: string;
+  firstSeenAt: string;
+  stallCount: number;
+}
+
 interface StalledData {
   config: {
     stallTimeoutDays: number;
+    stallSwapMaxProgress: number;
+    globalBlockThreshold: number;
     cutoffIso: string;
   };
   scheduledJob: {
@@ -76,9 +88,11 @@ interface StalledData {
     currentlyStalled: number;
     activeDownloadingTotal: number;
     recentSwapsShown: number;
+    globallyBlockedReleases: number;
   };
   currentlyStalled: StalledRequest[];
   recentSwaps: SwapEntry[];
+  globallyBlocked: GlobalBlock[];
 }
 
 function relTime(iso: string | null): string {
@@ -183,10 +197,14 @@ function AdminStalledDownloadsContent() {
 
         {data && (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
               <StatPill
                 label="Timeout"
                 value={`${data.config.stallTimeoutDays}d`}
+              />
+              <StatPill
+                label="Swap below"
+                value={`${data.config.stallSwapMaxProgress}%`}
               />
               <StatPill
                 label="Currently stalled"
@@ -198,8 +216,9 @@ function AdminStalledDownloadsContent() {
                 value={data.counts.activeDownloadingTotal}
               />
               <StatPill
-                label="Recent swaps"
-                value={data.recentSwaps.length}
+                label="Globally blocked"
+                value={data.counts.globallyBlockedReleases}
+                tone={data.counts.globallyBlockedReleases > 0 ? 'red' : 'gray'}
               />
             </div>
 
@@ -219,7 +238,7 @@ function AdminStalledDownloadsContent() {
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
                   Cutoff: anything started before{' '}
-                  <code className="text-xs">{data.config.cutoffIso}</code>
+                  <code className="text-xs">{data.config.cutoffIso}</code> · Global-block threshold: {data.config.globalBlockThreshold} stalls
                 </div>
               </div>
             </div>
@@ -277,6 +296,50 @@ function AdminStalledDownloadsContent() {
                       Showing first {data.currentlyStalled.length} of {data.counts.currentlyStalled}. Up to 50 are swapped per hourly pass.
                     </div>
                   )}
+                </div>
+              )}
+            </section>
+
+            <section className="mb-8">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">
+                Globally blocked releases ({data.counts.globallyBlockedReleases})
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 max-w-3xl">
+                Releases that stalled {data.config.globalBlockThreshold}+ times across independent requests. <strong>No</strong> future automatic search will pick these &mdash; not just the requests that originally tried them. Unblock manually from <Link href="/admin/blocklist" className="underline">/admin/blocklist</Link> if needed.
+              </p>
+              {data.globallyBlocked.length === 0 ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+                  No releases have crossed the global-block threshold yet.
+                </div>
+              ) : (
+                <div className="bg-white dark:bg-gray-800 border border-red-200 dark:border-red-800 rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-red-50 dark:bg-red-900/20 text-left text-xs uppercase tracking-wide text-red-700 dark:text-red-300">
+                      <tr>
+                        <th className="px-4 py-2">Release</th>
+                        <th className="px-4 py-2">Stalls</th>
+                        <th className="px-4 py-2">Indexer</th>
+                        <th className="px-4 py-2">First seen</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {data.globallyBlocked.map((g) => (
+                        <tr key={g.releaseKey} className="hover:bg-gray-50 dark:hover:bg-gray-900/40">
+                          <td
+                            className="px-4 py-2 text-gray-900 dark:text-gray-100 truncate max-w-[40ch]"
+                            title={g.releaseName}
+                          >
+                            {g.releaseName}
+                          </td>
+                          <td className="px-4 py-2 text-red-700 dark:text-red-300 font-medium">{g.stallCount}</td>
+                          <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{g.indexerName ?? '—'}</td>
+                          <td className="px-4 py-2 text-gray-500 dark:text-gray-400" title={g.firstSeenAt}>
+                            {relTime(g.firstSeenAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </section>
