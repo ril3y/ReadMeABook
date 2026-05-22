@@ -17,6 +17,7 @@ export interface Settings {
   registration: RegistrationSettings;
   prowlarr: ProwlarrSettings;
   indexerOptions: IndexerOptionsSettings;
+  automation: AutomationSettings;
   downloadClient: DownloadClientSettings;
   paths: PathsSettings;
   ebook: EbookSettings;
@@ -88,6 +89,19 @@ export interface IndexerOptionsSettings {
    * Backing config key: `indexer.skip_unreleased`.
    */
   skipUnreleased: boolean;
+}
+
+/**
+ * Automation behavioral options (background lifecycle processors).
+ * Persisted via `/api/admin/settings/automation`.
+ */
+export interface AutomationSettings {
+  /**
+   * Days a download can stay in `downloading` status before
+   * detect-stalled-downloads auto-swaps the release. Clamped 1..365.
+   * Backing config key: `automation.stall_timeout_days`.
+   */
+  stallTimeoutDays: number;
 }
 
 /**
