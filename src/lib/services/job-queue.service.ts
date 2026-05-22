@@ -26,6 +26,7 @@ export type JobType =
   | 'retry_failed_imports'
   | 'find_missing_ebooks'
   | 'cleanup_seeded_torrents'
+  | 'detect_stalled_downloads'
   | 'monitor_rss_feeds'
   | 'sync_reading_shelves'
   | 'check_watched_lists'
@@ -111,6 +112,10 @@ export interface FindMissingEbooksPayload extends JobPayload {
 }
 
 export interface CleanupSeededTorrentsPayload extends JobPayload {
+  scheduledJobId?: string;
+}
+
+export interface DetectStalledDownloadsPayload extends JobPayload {
   scheduledJobId?: string;
 }
 
@@ -401,6 +406,12 @@ export class JobQueueService {
       const { processCleanupSeededTorrents } = await import('../processors/cleanup-seeded-torrents.processor');
       const payloadWithJobId = await this.ensureJobRecord(job, 'cleanup_seeded_torrents');
       return await processCleanupSeededTorrents(payloadWithJobId);
+    });
+
+    this.queue.process('detect_stalled_downloads', 1, async (job: BullJob<DetectStalledDownloadsPayload>) => {
+      const { processDetectStalledDownloads } = await import('../processors/detect-stalled-downloads.processor');
+      const payloadWithJobId = await this.ensureJobRecord(job, 'detect_stalled_downloads');
+      return await processDetectStalledDownloads(payloadWithJobId);
     });
 
     this.queue.process('sync_reading_shelves', 1, async (job: BullJob<SyncShelvesPayload>) => {
@@ -793,6 +804,22 @@ export class JobQueueService {
       } as CleanupSeededTorrentsPayload,
       {
         priority: 10,
+      }
+    );
+  }
+
+  /**
+   * Add detect stalled downloads job (swaps releases for downloads that have
+   * been in progress longer than `automation.stall_timeout_days`).
+   */
+  async addDetectStalledDownloadsJob(scheduledJobId?: string): Promise<string> {
+    return await this.addJob(
+      'detect_stalled_downloads',
+      {
+        scheduledJobId,
+      } as DetectStalledDownloadsPayload,
+      {
+        priority: 8,
       }
     );
   }
