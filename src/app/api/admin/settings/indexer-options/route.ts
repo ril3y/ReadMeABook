@@ -26,13 +26,27 @@ const logger = RMABLogger.create('API.Admin.Settings.IndexerOptions');
 
 const CONFIG_KEY = 'indexer.skip_unreleased';
 const CONFIG_KEY_MIN_QUALITY = 'indexer.min_quality_score';
+const CONFIG_KEY_MIN_SEEDERS = 'indexer.min_seeders';
 const DEFAULT_MIN_QUALITY = 25;
+// Default 1: require at least one alive peer with the complete file.
+// 0 = filter off entirely (dead torrents allowed). Clamped 0..100 — 100 is
+// a generous practical ceiling; if you genuinely need more, dial it via
+// the configuration table directly.
+const DEFAULT_MIN_SEEDERS = 1;
+const MAX_MIN_SEEDERS = 100;
 
 function parseMinQuality(raw: string | null | undefined): number {
   if (!raw) return DEFAULT_MIN_QUALITY;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_QUALITY;
   return Math.min(Math.max(n, 0), 100);
+}
+
+function parseMinSeeders(raw: string | null | undefined): number {
+  if (raw === null || raw === undefined || raw === '') return DEFAULT_MIN_SEEDERS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_SEEDERS;
+  return Math.min(Math.max(n, 0), MAX_MIN_SEEDERS);
 }
 
 /**
@@ -44,16 +58,18 @@ export async function GET(request: NextRequest) {
     return requireAdmin(req, async () => {
       try {
         const configService = getConfigService();
-        const [skipRaw, qualityRaw] = await Promise.all([
+        const [skipRaw, qualityRaw, seedersRaw] = await Promise.all([
           configService.get(CONFIG_KEY),
           configService.get(CONFIG_KEY_MIN_QUALITY),
+          configService.get(CONFIG_KEY_MIN_SEEDERS),
         ]);
 
         // skipUnreleased default ON: missing or any value other than 'false' is enabled.
         const skipUnreleased = skipRaw !== 'false';
         const minQualityScore = parseMinQuality(qualityRaw);
+        const minSeeders = parseMinSeeders(seedersRaw);
 
-        return NextResponse.json({ skipUnreleased, minQualityScore });
+        return NextResponse.json({ skipUnreleased, minQualityScore, minSeeders });
       } catch (error) {
         logger.error('Failed to fetch indexer options', {
           error: error instanceof Error ? error.message : String(error),
@@ -76,7 +92,7 @@ export async function PUT(request: NextRequest) {
     return requireAdmin(req, async () => {
       try {
         const body = await request.json();
-        const { skipUnreleased, minQualityScore } = body ?? {};
+        const { skipUnreleased, minQualityScore, minSeeders } = body ?? {};
 
         const updates: Array<{ key: string; value: string; description: string }> = [];
 
@@ -111,9 +127,26 @@ export async function PUT(request: NextRequest) {
           });
         }
 
+        let clampedSeeders: number | undefined;
+        if (minSeeders !== undefined) {
+          if (typeof minSeeders !== 'number' || !Number.isFinite(minSeeders)) {
+            return NextResponse.json(
+              { error: 'minSeeders must be a number' },
+              { status: 400 }
+            );
+          }
+          clampedSeeders = Math.min(Math.max(Math.floor(minSeeders), 0), MAX_MIN_SEEDERS);
+          updates.push({
+            key: CONFIG_KEY_MIN_SEEDERS,
+            value: String(clampedSeeders),
+            description:
+              'Minimum seeders required for a torrent candidate to be auto-grabbed (0 disables)',
+          });
+        }
+
         if (updates.length === 0) {
           return NextResponse.json(
-            { error: 'Provide at least one of skipUnreleased, minQualityScore' },
+            { error: 'Provide at least one of skipUnreleased, minQualityScore, minSeeders' },
             { status: 400 }
           );
         }
@@ -122,13 +155,18 @@ export async function PUT(request: NextRequest) {
         await configService.setMany(updates.map(u => ({ ...u, category: 'indexer' })));
         for (const u of updates) configService.clearCache(u.key);
 
-        logger.info('Indexer options updated', { skipUnreleased, minQualityScore: clampedQuality });
+        logger.info('Indexer options updated', {
+          skipUnreleased,
+          minQualityScore: clampedQuality,
+          minSeeders: clampedSeeders,
+        });
 
         return NextResponse.json({
           success: true,
           message: 'Indexer options updated successfully',
           skipUnreleased,
           minQualityScore: clampedQuality,
+          minSeeders: clampedSeeders,
         });
       } catch (error) {
         logger.error('Failed to update indexer options', {

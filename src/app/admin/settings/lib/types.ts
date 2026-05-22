@@ -98,6 +98,25 @@ export interface IndexerOptionsSettings {
    * Backing config key: `indexer.min_quality_score`.
    */
   minQualityScore: number;
+  /**
+   * Hard floor on the number of seeders required for a torrent candidate
+   * to be auto-grabbed. Applied AFTER ranking — candidates below this
+   * threshold are dropped from the picklist before the top result is
+   * selected. NZB/Usenet results (which have no seeders concept) are
+   * exempt: their `seeders` field is undefined and they always pass.
+   *
+   * 0 = filter disabled (any seeder count, including dead torrents).
+   * 1 = require at least one peer with the full file (recommended).
+   * 3-5 = "high confidence" — useful once your indexer mix has enough
+   *       depth that you can afford to skip thin releases.
+   *
+   * Default 1: prevents grabbing torrents that will never complete
+   * (no seeders = no source for the file). See `searchWithVariations`
+   * in the audiobook processor for the pre-search Prowlarr filter and
+   * `min_seeders` post-rank filter in both search processors.
+   * Backing config key: `indexer.min_seeders`.
+   */
+  minSeeders: number;
 }
 
 /**
