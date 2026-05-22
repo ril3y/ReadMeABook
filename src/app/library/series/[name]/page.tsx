@@ -89,8 +89,6 @@ function LibrarySeriesContent({ name }: { name: string }) {
     );
   }
 
-  const missing = totalBooks !== null ? Math.max(0, totalBooks - bookCount) : null;
-
   // Pick the books to render in the grid:
   //   - If we have catalog data (seriesAsin resolved + scrape returned),
   //     use that — it includes BOTH owned and missing books with isAvailable
@@ -101,6 +99,22 @@ function LibrarySeriesContent({ name }: { name: string }) {
     return books;
   }, [catalogSeries, books]);
   const usingCatalogView = !!catalogSeries?.books?.length;
+
+  // Missing count: prefer the count from the actually-loaded catalog when
+  // available, because Audible's series header (`totalBooks`) frequently
+  // overstates inventory due to abridgement editions, region variants, and
+  // re-releases that share an ASIN with books already in the library.
+  // Falls back to (totalBooks - bookCount) when the catalog isn't loaded yet.
+  const visibleMissing = useMemo(
+    () => displayBooks.filter(b => !b.isAvailable).length,
+    [displayBooks]
+  );
+  const headerMissing = totalBooks !== null ? Math.max(0, totalBooks - bookCount) : null;
+  const missing = usingCatalogView ? visibleMissing : headerMissing;
+  // True when Audible header advertises more books than we can list — likely
+  // due to abridged/region editions counted separately.
+  const headerDisagreesWithCatalog =
+    usingCatalogView && headerMissing !== null && headerMissing > visibleMissing;
 
   return (
     <main className="container mx-auto px-4 py-8 max-w-7xl space-y-6">
@@ -130,6 +144,13 @@ function LibrarySeriesContent({ name }: { name: string }) {
                 </>
               )}
           </p>
+          {headerDisagreesWithCatalog && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Audible&rsquo;s catalog header says {totalBooks} books but only lists {displayBooks.length}.
+              The other {(totalBooks ?? 0) - displayBooks.length} are typically abridged
+              editions or region variants of books you already own.
+            </p>
+          )}
         </div>
 
         {/* When we have a resolved seriesAsin AND there are missing books,
