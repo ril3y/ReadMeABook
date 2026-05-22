@@ -102,6 +102,18 @@ export interface AutomationSettings {
    * Backing config key: `automation.stall_timeout_days`.
    */
   stallTimeoutDays: number;
+  /**
+   * Stalled downloads at or above this progress percent are NOT swapped —
+   * gives near-complete torrents more grace. Clamped 0..100, default 50.
+   * Backing config key: `automation.stall_swap_max_progress`.
+   */
+  stallSwapMaxProgress: number;
+  /**
+   * Independent stall failures of the same release before it gets promoted to
+   * a cross-request global block. Clamped 1..100, default 3.
+   * Backing config key: `automation.global_block_threshold`.
+   */
+  globalBlockThreshold: number;
 }
 
 /**
