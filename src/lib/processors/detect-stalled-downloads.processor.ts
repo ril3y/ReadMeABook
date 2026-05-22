@@ -398,70 +398,88 @@ export async function processDetectStalledDownloads(
               // the dead release, count toward the global threshold, and
               // queue a fresh search. Without this step, retry-missing-torrents
               // would re-grab the same stalled torrent on its next pass.
+              //
+              // The block/search step is wrapped in its OWN try/catch so a
+              // transient Redis or DB blip can't strand the qBT torrent —
+              // the delete in the `finally` below always runs. Worst case:
+              // we lose the block-and-research on this pass; the orphan
+              // torrent is still cleaned out of qBT.
+              let reSearched = false;
               if (dh && !requestDeleted && requestStatus === 'awaiting_search' && dh.request && dh.torrentName) {
-                const stalledDays = t.addedAt
-                  ? Math.floor((Date.now() - t.addedAt.getTime()) / (24 * 60 * 60 * 1000))
-                  : timeoutDays;
-                const reason = `Stalled timeout (${stalledDays}d, threshold ${timeoutDays}d)`;
-                const releaseKey = normalizeReleaseKey(dh.torrentName);
+                try {
+                  const stalledDays = t.addedAt
+                    ? Math.floor((Date.now() - t.addedAt.getTime()) / (24 * 60 * 60 * 1000))
+                    : timeoutDays;
+                  const reason = `Stalled timeout (${stalledDays}d, threshold ${timeoutDays}d)`;
+                  const releaseKey = normalizeReleaseKey(dh.torrentName);
 
-                await addAutoBlock({
-                  requestId: dh.request.id,
-                  releaseName: dh.torrentName,
-                  releaseHash: dh.torrentHash ?? dh.nzbId ?? null,
-                  indexerName: dh.indexerName ?? null,
-                  indexerId: dh.indexerId ?? null,
-                  source: 'download_fail',
-                  reason,
-                  reasonDetail: null,
-                  downloadHistoryId: dh.id,
-                  jobId,
-                });
-
-                // Promote to global if threshold reached (same as Stage 1)
-                const stallCount = await prisma.blockedRelease.count({
-                  where: {
-                    releaseKey,
+                  await addAutoBlock({
+                    requestId: dh.request.id,
+                    releaseName: dh.torrentName,
+                    releaseHash: dh.torrentHash ?? dh.nzbId ?? null,
+                    indexerName: dh.indexerName ?? null,
+                    indexerId: dh.indexerId ?? null,
                     source: 'download_fail',
-                    reason: { startsWith: STALL_REASON_PREFIX },
-                  },
-                });
-                if (stallCount >= globalThreshold) {
-                  const promoted = await prisma.blockedRelease.updateMany({
+                    reason,
+                    reasonDetail: null,
+                    downloadHistoryId: dh.id,
+                    jobId,
+                  });
+
+                  // Promote to global if threshold reached (same as Stage 1)
+                  const stallCount = await prisma.blockedRelease.count({
                     where: {
                       releaseKey,
                       source: 'download_fail',
                       reason: { startsWith: STALL_REASON_PREFIX },
-                      global: false,
                     },
-                    data: { global: true },
                   });
-                  if (promoted.count > 0) {
-                    promotedToGlobal += promoted.count;
+                  if (stallCount >= globalThreshold) {
+                    const promoted = await prisma.blockedRelease.updateMany({
+                      where: {
+                        releaseKey,
+                        source: 'download_fail',
+                        reason: { startsWith: STALL_REASON_PREFIX },
+                        global: false,
+                      },
+                      data: { global: true },
+                    });
+                    if (promoted.count > 0) {
+                      promotedToGlobal += promoted.count;
+                    }
                   }
-                }
 
-                // Queue a fresh search now (don't wait for daily retry-missing-torrents).
-                if (dh.request.audiobook) {
-                  if (dh.request.type === 'ebook') {
-                    await jobQueue.addSearchEbookJob(dh.request.id, {
-                      id: dh.request.audiobook.id,
-                      title: dh.request.audiobook.title,
-                      author: dh.request.audiobook.author,
-                      asin: dh.request.audiobook.audibleAsin || undefined,
-                    });
-                  } else {
-                    await jobQueue.addSearchJob(dh.request.id, {
-                      id: dh.request.audiobook.id,
-                      title: dh.request.audiobook.title,
-                      author: dh.request.audiobook.author,
-                      asin: dh.request.audiobook.audibleAsin || undefined,
-                    });
+                  // Queue a fresh search now (don't wait for daily retry-missing-torrents).
+                  if (dh.request.audiobook) {
+                    if (dh.request.type === 'ebook') {
+                      await jobQueue.addSearchEbookJob(dh.request.id, {
+                        id: dh.request.audiobook.id,
+                        title: dh.request.audiobook.title,
+                        author: dh.request.audiobook.author,
+                        asin: dh.request.audiobook.audibleAsin || undefined,
+                      });
+                    } else {
+                      await jobQueue.addSearchJob(dh.request.id, {
+                        id: dh.request.audiobook.id,
+                        title: dh.request.audiobook.title,
+                        author: dh.request.audiobook.author,
+                        asin: dh.request.audiobook.audibleAsin || undefined,
+                      });
+                    }
                   }
+                  reSearched = true;
+                } catch (blockErr) {
+                  qbtScanErrors++;
+                  logger.warn(`Stage 2: block-and-research failed, still deleting torrent`, {
+                    hash: t.id,
+                    requestId: dh.request.id,
+                    error: blockErr instanceof Error ? blockErr.message : String(blockErr),
+                  });
                 }
               }
 
-              // Always delete the torrent from qBT (with files).
+              // Always delete the torrent from qBT (with files), regardless
+              // of whether the block/research path above succeeded.
               await torrentClient.deleteDownload(t.id, true);
               if (!dh) {
                 orphansDeleted++;
@@ -477,7 +495,7 @@ export async function processDetectStalledDownloads(
                   hash: t.id,
                   name: t.name,
                   requestStatus: requestStatus ?? 'request-deleted',
-                  reSearched: requestStatus === 'awaiting_search',
+                  reSearched,
                   addedAt: t.addedAt?.toISOString(),
                 });
               }
