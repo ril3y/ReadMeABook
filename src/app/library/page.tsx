@@ -50,11 +50,13 @@ function LibraryAuthorTile({ author }: { author: LibraryAuthor }) {
 }
 
 function LibrarySeriesTile({ series }: { series: LibrarySeries }) {
-  // Prefer Audible series detail page when we have a series ASIN; otherwise
-  // search by title (so the user can still drill in).
-  const href = series.asin
-    ? `/series/${series.asin}`
-    : `/search?q=${encodeURIComponent(series.title)}`;
+  // Always route to the Library Series Detail page (by display name). That
+  // page ALWAYS works — lists the owned books from plex_library regardless
+  // of whether we've resolved the seriesAsin yet. When the asin IS known
+  // the page surfaces a "View full series catalog" deep-link to the
+  // Audible /series/[asin] view. Previously this fell through to /search?q=
+  // for asin-less series, dropping users on a generic search page.
+  const href = `/library/series/${encodeURIComponent(series.title)}`;
 
   // Count badge: when we have a known catalog total, render "X / Y total"
   // and surface how many books the user is missing. When totalBooks is
