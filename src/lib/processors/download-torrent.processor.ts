@@ -90,8 +90,16 @@ export async function processDownloadTorrent(payload: DownloadTorrentPayload): P
         downloadClient: client.clientType,
         downloadClientId,
         torrentName: torrent.title,
-        // Set protocol-specific ID fields for backward compatibility
-        torrentHash: client.protocol === 'torrent' ? (torrent.infoHash || downloadClientId) : undefined,
+        // Set protocol-specific ID fields for backward compatibility.
+        // Normalize hash to lowercase at write time: indexers return mixed-case
+        // hex (Prowlarr passes through whatever the indexer XML says), while
+        // qBittorrent's torrent list reports lowercase. Without normalization,
+        // downstream lookups (e.g. detect-stalled-downloads Stage 2's
+        // `WHERE torrentHash IN (...)` against `torrent.id.toLowerCase()`)
+        // case-mismatch and silently misclassify linked rows as orphans.
+        torrentHash: client.protocol === 'torrent'
+          ? (torrent.infoHash || downloadClientId).toLowerCase()
+          : undefined,
         nzbId: client.protocol === 'usenet' ? downloadClientId : undefined,
         torrentSizeBytes: torrent.size,
         torrentUrl: indexerPageUrl,
