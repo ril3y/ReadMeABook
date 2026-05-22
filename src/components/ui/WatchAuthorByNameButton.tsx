@@ -180,10 +180,10 @@ export function WatchAuthorByNameButton({ authorName }: Props) {
         isOpen={showConfirm}
         title={`Watch ${resolved?.name ?? authorName}?`}
         message="RMAB will check Audible daily for new releases by this author and auto-request anything new."
-        confirmLabel="Watch"
-        cancelLabel="Cancel"
+        confirmText="Watch"
+        cancelText="Cancel"
         onConfirm={handleConfirmWatch}
-        onCancel={() => setShowConfirm(false)}
+        onClose={() => setShowConfirm(false)}
       />
     </div>
   );
