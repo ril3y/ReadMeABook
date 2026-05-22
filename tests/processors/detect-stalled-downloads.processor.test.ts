@@ -72,7 +72,18 @@ function makeStalledRequest(overrides: Record<string, any> = {}) {
 describe('processDetectStalledDownloads', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    configMock.get.mockResolvedValue('7');
+    // Default config: 7-day timeout, swap below 50%, global threshold 3.
+    // Individual tests can override with mockImplementation.
+    configMock.get.mockImplementation((key: string) => {
+      if (key === 'automation.stall_timeout_days') return Promise.resolve('7');
+      if (key === 'automation.stall_swap_max_progress') return Promise.resolve('50');
+      if (key === 'automation.global_block_threshold') return Promise.resolve('3');
+      return Promise.resolve(null);
+    });
+    // Stall counter defaults to 1 (just this stall, no previous ones) so the
+    // global-threshold path is NOT taken unless a test overrides this.
+    prismaMock.blockedRelease.count.mockResolvedValue(1);
+    prismaMock.blockedRelease.updateMany.mockResolvedValue({ count: 0 });
   });
 
   it('returns early when no stalled downloads are found', async () => {
@@ -224,7 +235,7 @@ describe('processDetectStalledDownloads', () => {
     );
   });
 
-  it('queries only currently-downloading requests with progress < 100 past the cutoff', async () => {
+  it('queries only currently-downloading requests with progress below maxProgress past the cutoff', async () => {
     prismaMock.request.findMany.mockResolvedValue([]);
 
     const { processDetectStalledDownloads } = await import(
@@ -235,8 +246,69 @@ describe('processDetectStalledDownloads', () => {
     const call = prismaMock.request.findMany.mock.calls[0][0];
     expect(call.where.status).toBe('downloading');
     expect(call.where.deletedAt).toBeNull();
-    expect(call.where.progress).toEqual({ lt: 100 });
+    // Default maxProgress is 50 — anything 50%+ is spared
+    expect(call.where.progress).toEqual({ lt: 50 });
     expect(call.where.downloadHistory.some.selected).toBe(true);
     expect(call.where.downloadHistory.some.startedAt.lt).toBeInstanceOf(Date);
+  });
+
+  it('honors a custom maxProgress setting (e.g. 95% means swap almost anything)', async () => {
+    configMock.get.mockImplementation((key: string) => {
+      if (key === 'automation.stall_timeout_days') return Promise.resolve('7');
+      if (key === 'automation.stall_swap_max_progress') return Promise.resolve('95');
+      if (key === 'automation.global_block_threshold') return Promise.resolve('3');
+      return Promise.resolve(null);
+    });
+    prismaMock.request.findMany.mockResolvedValue([]);
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'job-9' });
+
+    expect(result.maxProgress).toBe(95);
+    expect(prismaMock.request.findMany.mock.calls[0][0].where.progress).toEqual({ lt: 95 });
+  });
+
+  it('promotes a release to GLOBAL block when stall count crosses the threshold', async () => {
+    // 3 prior stalls + this one = 3 total → threshold met
+    prismaMock.blockedRelease.count.mockResolvedValue(3);
+    prismaMock.blockedRelease.updateMany.mockResolvedValue({ count: 3 });
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue({
+      deleteDownload: vi.fn().mockResolvedValue(undefined),
+    });
+    prismaMock.request.findMany.mockResolvedValue([makeStalledRequest()]);
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'job-10' });
+
+    expect(result.promotedToGlobal).toBe(3);
+    expect(prismaMock.blockedRelease.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          source: 'download_fail',
+          global: false,
+        }),
+        data: { global: true },
+      })
+    );
+  });
+
+  it('does NOT promote to global when stall count is below the threshold', async () => {
+    prismaMock.blockedRelease.count.mockResolvedValue(2); // < threshold of 3
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue({
+      deleteDownload: vi.fn().mockResolvedValue(undefined),
+    });
+    prismaMock.request.findMany.mockResolvedValue([makeStalledRequest()]);
+
+    const { processDetectStalledDownloads } = await import(
+      '@/lib/processors/detect-stalled-downloads.processor'
+    );
+    const result = await processDetectStalledDownloads({ jobId: 'job-11' });
+
+    expect(result.promotedToGlobal).toBe(0);
+    expect(prismaMock.blockedRelease.updateMany).not.toHaveBeenCalled();
   });
 });
