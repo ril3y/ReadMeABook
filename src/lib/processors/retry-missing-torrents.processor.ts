@@ -30,7 +30,7 @@ export async function processRetryMissingTorrents(payload: RetryMissingTorrentsP
     const configService = getConfigService();
     const skipUnreleasedSetting = (await configService.get('indexer.skip_unreleased')) !== 'false';
 
-    // Find the 50 oldest-cooled-down requests in awaiting_search/awaiting_release.
+    // Find the 200 oldest-cooled-down requests in awaiting_search/awaiting_release.
     //
     // ORDER + COOLDOWN are LOAD-BEARING. Without them, Prisma falls back to PK
     // ordering and the daily job picks the same 50 IDs every run forever —
@@ -40,6 +40,12 @@ export async function processRetryMissingTorrents(payload: RetryMissingTorrentsP
     //     requests get priority, then oldest-searched).
     //   - `lastSearchAt < (now - 24h)` ensures we don't re-search anything
     //     we've already touched in the last day (which would be wasted work).
+    //
+    // Cap = 200. Searches themselves are cheap (most return 0 hits and are
+    // never seen by ABB); the actual rate-limit risk is on SUCCESSFUL grabs.
+    // The per-loop sleep below paces queue insertion over ~3.3 min so Bull's
+    // search_indexers worker (concurrency=2) drains them gradually rather
+    // than burst-processing all 200, giving the indexer time to recover.
     const cooldownAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const requests = await prisma.request.findMany({
       where: {
@@ -57,7 +63,7 @@ export async function processRetryMissingTorrents(payload: RetryMissingTorrentsP
         { lastSearchAt: { sort: 'asc', nulls: 'first' } },
         { createdAt: 'asc' },
       ],
-      take: 50,
+      take: 200,
     });
 
     logger.info(`Found ${requests.length} requests awaiting search/release`);
@@ -165,8 +171,13 @@ export async function processRetryMissingTorrents(payload: RetryMissingTorrentsP
         logger.error(`Failed to process request ${request.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
 
-      // Spread DB operations over time to avoid connection pool exhaustion
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Pace queue insertion: 1s × 200 = ~3.3 min to fully queue the batch.
+      // Combined with search_indexers Bull concurrency=2, Bull drains them
+      // gradually rather than burst-processing all 200, giving Audnexus +
+      // Jackett+ABB time between hits. Avoids the "indexer auto-disabled
+      // after 15-grab burst" pattern observed when 50-batches landed too
+      // fast yesterday. Also still spreads the per-loop DB writes.
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     logger.info(`Retry pass complete: triggered=${triggered}, transitioned=${transitioned}, skipped=${skipped} of ${requests.length}`);
